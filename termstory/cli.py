@@ -27,6 +27,25 @@ from termstory.formatter import (
     DISPLAY_NAMES,
 )
 
+import sys
+import re
+
+def intercept_sys_argv():
+    """Intercept positional date arguments (e.g. termstory 2026-06-02) and rewrite them
+    to option flags so they do not conflict with subcommands in click/typer"""
+    if len(sys.argv) > 1:
+        date_pattern = re.compile(r'^\d{4}-\d{2}-\d{2}$')
+        first_arg = sys.argv[1]
+        if date_pattern.match(first_arg):
+            os.environ["TERMSTORY_DATE_OVERRIDE"] = first_arg
+            if len(sys.argv) == 2:
+                sys.argv[1] = "today"
+            else:
+                sys.argv.pop(1)
+
+# Execute immediately to intercept arguments before click/typer processes them
+intercept_sys_argv()
+
 app = typer.Typer(
     help="TermStory CLI - Parse local shell history and explore your work patterns",
     no_args_is_help=False,
@@ -266,23 +285,20 @@ def list_projects(
 @app.callback(invoke_without_command=True)
 def main(
     ctx: typer.Context,
-    date_arg: Optional[str] = typer.Argument(None, help="Positional date override (YYYY-MM-DD) running today's summary"),
     date: Optional[str] = typer.Option(None, "--date", help="Date override (YYYY-MM-DD) for commands"),
 ):
     """TermStory - local shell history parsing and session summaries"""
-    override_date = date or date_arg
-    if override_date:
+    if date:
         try:
-            # Validate date format
-            date_parser.parse(override_date)
-            os.environ["TERMSTORY_DATE_OVERRIDE"] = override_date
+            date_parser.parse(date)
+            os.environ["TERMSTORY_DATE_OVERRIDE"] = date
         except Exception:
-            typer.echo(f"Error: Invalid date format '{override_date}'", err=True)
+            typer.echo(f"Error: Invalid date format '{date}'", err=True)
             raise typer.Exit(code=1)
             
     if ctx.invoked_subcommand is None:
         # No subcommand, fallback to today's report
-        show_today()
+        show_today(detailed=False, compare=False, stats=False)
 
 if __name__ == "__main__":
     app()
