@@ -77,7 +77,12 @@ def extract_files_from_commands(commands: List[Command]) -> Dict[str, int]:
 
 def format_today_output(sessions: List[Session], projects: List[Project], compare_sessions: List[Session] = None) -> str:
     """Format today's sessions, command aggregates, and project details as a clean UI card"""
+    is_override = "TERMSTORY_DATE_OVERRIDE" in os.environ
+    
     if not sessions:
+        if is_override:
+            date_str = get_current_time().strftime("%A, %B %d, %Y")
+            return f"No sessions recorded on {date_str}."
         return "No sessions recorded today."
         
     today_str = get_current_time().strftime("%A, %B %d, %Y")
@@ -89,7 +94,10 @@ def format_today_output(sessions: List[Session], projects: List[Project], compar
     for s in sessions:
         sessions_by_project[s.project_id].append(s)
         
-    header_title = f"📋 Today ({today_str})"
+    if is_override:
+        header_title = f"📋 Report for {today_str}"
+    else:
+        header_title = f"📋 Today ({today_str})"
     border = "─" * (len(header_title) + 2)
     output = []
     output.append(f"╭{border}╮")

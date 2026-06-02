@@ -69,14 +69,14 @@ def test_cli_week_and_month_commands(tmp_path, monkeypatch):
     # 5. Test date override option
     result = runner.invoke(app, ["--date", "2026-06-02"])
     assert result.exit_code == 0
-    assert "Today" in result.stdout
+    assert "Report for" in result.stdout
     assert "June 02, 2026" in result.stdout
     assert "Apache HugeGraph" in result.stdout
 
     # 6. Test a different date override (May 2nd, 2026) where no sessions exist
     result = runner.invoke(app, ["--date", "2026-05-02"])
     assert result.exit_code == 0
-    assert "No sessions recorded today" in result.stdout
+    assert "No sessions recorded on Saturday, May 02, 2026" in result.stdout
     assert "Apache HugeGraph" not in result.stdout  # Since the session is in June, not May
 
     # 7. Add a session in May 2nd, 2026 and verify it's queried only for May 2nd
