@@ -344,7 +344,7 @@ def search_history(
     # Limit results
     results = results[:limit]
     
-    output = format_search_results(query, results)
+    output = format_search_results(query, results, detailed=detailed)
     console.print(output)
 
 @app.command("insights")

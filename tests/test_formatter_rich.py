@@ -110,9 +110,9 @@ def test_formatter_search_results():
     }]
     
     output = format_search_results("git", results)
-    assert "Search Results" in output
+    assert "Query: git" in output
     assert "Project Delta" in output
-    assert "git diff" in output
+    assert "Init" in output
 
 def test_formatter_insights_output():
     insights_data = {

@@ -133,7 +133,7 @@ def test_cli_search_and_insights_commands(tmp_path, monkeypatch):
     # Test search command
     result = runner.invoke(app, ["search", "health"])
     assert result.exit_code == 0
-    assert "Search Results" in result.stdout
+    assert "Query: health" in result.stdout
     assert "Apache HugeGraph" in result.stdout
     assert "health" in result.stdout
 

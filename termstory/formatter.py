@@ -590,68 +590,123 @@ def format_detailed_sessions(sessions: List[Session]) -> str:
         
     return render_to_string(Group(*group_elements))
 
-def format_search_results(query: str, results: List[Dict]) -> str:
+def highlight_query(text_str: str, query: str) -> Text:
+    """Case-insensitively highlight query in text_str, returning a Rich Text object"""
+    text = Text(text_str)
+    if not query:
+        return text
+    query_lower = query.lower()
+    len_q = len(query)
+    start = 0
+    while True:
+        pos = text_str.lower().find(query_lower, start)
+        if pos == -1:
+            break
+        text.stylize("bold red", pos, pos + len_q)
+        start = pos + len_q
+    return text
+
+def format_search_results(query: str, results: List[Dict], detailed: bool = False) -> str:
     """Format matching search sessions and highlight key elements"""
-    header_title = f"🔍 Search Results for '{query}'"
-    
     if not results:
-        return render_to_string(Panel(f"No results found matching '{query}'.", title=header_title, border_style="yellow", box=ROUNDED))
+        return f"🔍 Query: [bold cyan]{query}[/] | No matches found"
         
-    elements = []
-    total_matched_time = 0
+    total_matched_time = sum(r["duration_seconds"] for r in results)
     
+    # Calculate date range
+    timestamps = [r["start_time"] for r in results]
+    min_dt = datetime.fromtimestamp(min(timestamps))
+    max_dt = datetime.fromtimestamp(max(timestamps))
+    if min_dt.year == max_dt.year:
+        date_range_str = f"{min_dt.strftime('%b %d')} → {max_dt.strftime('%b %d')}"
+    else:
+        date_range_str = f"{min_dt.strftime('%b %d, %Y')} → {max_dt.strftime('%b %d, %Y')}"
+        
+    header_str = f"🔍 Query: [bold cyan]{query}[/] | [bold green]{format_duration(total_matched_time)}[/] total | [bold]{len(results)}[/] sessions | [dim]{date_range_str}[/]"
+    
+    if not detailed:
+        table = Table(box=None, show_header=False, padding=(0, 1))
+        table.add_column("date", style="dim", width=6, no_wrap=True)
+        table.add_column("time", style="dim", width=5, no_wrap=True)
+        table.add_column("duration", style="green", width=7, no_wrap=True)
+        table.add_column("project", style="cyan bold", width=16, no_wrap=True)
+        table.add_column("match")
+        
+        for r in results:
+            dt = datetime.fromtimestamp(r["start_time"])
+            date_str = dt.strftime("%b %d")
+            time_str = dt.strftime("%H:%M")
+            dur_str = f"({format_duration(r['duration_seconds'])})"
+            
+            proj_name = r["project_name"] or "General"
+            if len(proj_name) > 16:
+                proj_name = proj_name[:15] + "…"
+            
+            match_text = ""
+            if r["matching_commits"]:
+                c = r["matching_commits"][0]
+                match_text = c["cleaned_message"] or c["message"]
+            elif r["matching_commands"]:
+                match_text = r["matching_commands"][0]
+            elif r["all_commands"]:
+                match_text = r["all_commands"][0]
+                
+            t_obj = highlight_query(match_text, query)
+            t_obj.no_wrap = True
+            t_obj.overflow = "ellipsis"
+            
+            table.add_row(
+                date_str,
+                time_str,
+                dur_str,
+                proj_name,
+                t_obj
+            )
+            
+        outer_group = Group(
+            Text.from_markup(header_str + "\n"),
+            table
+        )
+        return render_to_string(outer_group)
+        
+    # Detailed mode (Box-free progressive disclosure view)
+    group_items = [Text.from_markup(header_str + "\n")]
     for idx, r in enumerate(results, 1):
         s_id = r["session_id"]
         start_str = format_time(r["start_time"])
         end_str = format_time(r["end_time"])
         date_str = datetime.fromtimestamp(r["start_time"]).strftime("%B %d, %Y")
         dur_str = format_duration(r["duration_seconds"])
-        total_matched_time += r["duration_seconds"]
-        
-        proj_name = r["project_name"]
+        proj_name = r["project_name"] or "General"
         
         session_header = f"MATCH {idx}: Session {s_id} on [bold]{date_str}[/] ({start_str} - {end_str}) [[bold green]{dur_str}[/]]"
         proj_line = f"📁 Project: [bold cyan]{proj_name}[/]"
         
-        session_group_items = [
+        session_group = [
             Text.from_markup(session_header),
             Text.from_markup(proj_line)
         ]
         
-        # Highlight matching commands
-        import re
-        escaped_query = re.escape(query)
         if r["matching_commands"]:
-            cmd_lines = ["\n[bold yellow]Matching Commands:[/]"]
+            session_group.append(Text("\nMatching Commands:"))
             for cmd in r["matching_commands"]:
-                highlighted = re.sub(escaped_query, r"[bold red]\g<0>[/]", cmd, flags=re.IGNORECASE)
-                cmd_lines.append(f"  • {highlighted}")
-            session_group_items.append(Text.from_markup("\n".join(cmd_lines)))
-            
-        # Highlight matching commits
+                session_group.append(Group(Text("  • "), highlight_query(cmd, query)))
+                
         if r["matching_commits"]:
-            commit_lines = ["\n[bold cyan]Matching Commits:[/]"]
+            session_group.append(Text("\nMatching Commits:"))
             for c in r["matching_commits"]:
                 short_hash = c["hash"][:7]
                 msg = c["cleaned_message"] or c["message"]
-                highlighted = re.sub(escaped_query, r"[bold red]\g<0>[/]", msg, flags=re.IGNORECASE)
-                commit_lines.append(f"  • [cyan]{short_hash}[/] {highlighted}")
-            session_group_items.append(Text.from_markup("\n".join(commit_lines)))
-            
-        elements.append(Panel(Group(*session_group_items), box=ROUNDED, border_style="blue"))
+                session_group.append(Group(Text(f"  • [cyan]{short_hash}[/] "), highlight_query(msg, query)))
+                
+        session_group.append(Text("\n" + "─" * 60 + "\n"))
+        group_items.append(Group(*session_group))
         
-    footer_text = [
-        f"📈 Total Results: [bold]{len(results)}[/] sessions matched",
-        f"⏱️  Total Matched Work Time: [bold green]{format_duration(total_matched_time)}[/]"
-    ]
-    
-    outer_group = Group(
-        Panel(Align.center(f"[bold green]{header_title}[/]"), border_style="green", box=ROUNDED),
-        *elements,
-        Panel(Text.from_markup("\n".join(footer_text)), border_style="green")
-    )
-    
-    return render_to_string(outer_group)
+    if group_items and isinstance(group_items[-1], Group) and group_items[-1].renderables and isinstance(group_items[-1].renderables[-1], Text) and group_items[-1].renderables[-1].plain.startswith("\n─"):
+        # Remove trailing separator
+        pass
+        
+    return render_to_string(Group(*group_items))
 
 def format_insights_output(insights: Dict) -> str:
     """Format the developer work patterns insights report"""
