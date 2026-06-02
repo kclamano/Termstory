@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="termstory",
-    version="0.2.0",
+    version="0.2.5",
     author="TermStory Contributors",
     description="Local shell history parser, session grouper, and daily summary display",
     long_description=open("README.md").read() if open("README.md") else "",
@@ -12,6 +12,7 @@ setup(
     install_requires=[
         "typer>=0.9.0",
         "python-dateutil>=2.8.2",
+        "rich>=13.0.0",
     ],
     entry_points={
         "console_scripts": [

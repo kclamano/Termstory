@@ -22,13 +22,21 @@ from termstory.formatter import (
     format_project_output,
     format_projects_list,
     format_detailed_sessions,
+    format_search_results,
+    format_insights_output,
     extract_files_from_commands,
     classify_command,
     DISPLAY_NAMES,
 )
 
+from rich.console import Console
+from rich.table import Table
+
 import sys
 import re
+
+# Initialize rich console
+console = Console()
 
 def intercept_sys_argv():
     """Intercept positional date arguments (e.g. termstory 2026-06-02) and rewrite them
@@ -61,6 +69,15 @@ def run_ingestion(db: Database) -> None:
     sessions = create_sessions(commands)
     projects = detect_projects(sessions)
     db.save_data(projects, sessions, commands)
+    
+    # Ingest commits from last 90 days for each project
+    from termstory.git_integration import get_project_commits
+    since_ts = int(get_current_time().timestamp()) - 90 * 24 * 3600
+    for p in projects:
+        if p.id is not None and p.path:
+            commits = get_project_commits(p.path, since_ts)
+            if commits:
+                db.save_commits(p.id, commits)
 
 @app.command("today")
 def show_today(
@@ -83,7 +100,7 @@ def show_today(
     
     if detailed:
         output = format_detailed_sessions(today_sessions)
-        typer.echo(output)
+        console.print(output)
         return
         
     if stats:
@@ -94,10 +111,15 @@ def show_today(
             cat = classify_command(c.command)
             cmd_counts[cat] = cmd_counts.get(cat, 0) + 1
             
-        typer.echo("📋 Today's Command Stats:")
+        from rich.box import ROUNDED
+        table = Table(title="📋 Today's Command Stats", box=ROUNDED, border_style="green")
+        table.add_column("Command Category", style="cyan bold")
+        table.add_column("Count", justify="right", style="green")
+        
         for category, count in sorted(cmd_counts.items(), key=lambda x: x[1], reverse=True):
             display_cat = DISPLAY_NAMES.get(category, category)
-            typer.echo(f"  {display_cat:<20} {count} commands")
+            table.add_row(display_cat, f"{count} commands")
+        console.print(table)
         return
         
     compare_sessions = None
@@ -109,7 +131,7 @@ def show_today(
         compare_sessions = db.get_range_sessions(yesterday_start, yesterday_end)
         
     output = format_today_output(today_sessions, today_projects, compare_sessions=compare_sessions)
-    typer.echo(output)
+    console.print(output)
 
 @app.command("week")
 def show_week(
@@ -142,7 +164,7 @@ def show_week(
     else:
         output = format_week_output(sessions, projects, start_ts, end_ts)
         
-    typer.echo(output)
+    console.print(output)
 
 @app.command("month")
 def show_month(
@@ -165,7 +187,7 @@ def show_month(
             year = dt.year
             month_num = dt.month
         except Exception:
-            typer.echo(f"Error: Could not parse month '{month_arg}'", err=True)
+            Console(stderr=True).print(f"[bold red]Error: Could not parse month '{month_arg}'[/]")
             raise typer.Exit(code=1)
     elif last:
         # Go to first of this month and subtract a day
@@ -188,7 +210,7 @@ def show_month(
     else:
         output = format_month_output(sessions, projects, year, month_num)
         
-    typer.echo(output)
+    console.print(output)
 
 @app.command("project")
 def show_project(
@@ -207,7 +229,7 @@ def show_project(
     
     projects = db.search_projects(name)
     if not projects:
-        typer.echo(f"Error: No project found matching '{name}'", err=True)
+        Console(stderr=True).print(f"[bold red]Error: No project found matching '{name}'[/]")
         raise typer.Exit(code=1)
         
     # Take the first (most relevant) matched project
@@ -219,7 +241,7 @@ def show_project(
             start_ts = int(date_parser.parse(since).timestamp())
             end_ts = int(get_current_time().timestamp())
         except Exception:
-            typer.echo(f"Error: Could not parse date '{since}'", err=True)
+            Console(stderr=True).print(f"[bold red]Error: Could not parse date '{since}'[/]")
             raise typer.Exit(code=1)
     elif last_week:
         start_ts, end_ts = get_week_range(last=True)
@@ -234,10 +256,16 @@ def show_project(
     if files:
         all_commands = [c for s in sessions for c in s.commands]
         file_counts = extract_files_from_commands(all_commands)
-        typer.echo(f"📁 Files modified in '{project.name}':")
+        
+        from rich.box import ROUNDED
+        table = Table(title=f"📁 Files modified in '{project.name}'", box=ROUNDED, border_style="cyan")
+        table.add_column("File Name", style="cyan bold")
+        table.add_column("Edit Count", justify="right", style="green")
+        
         for fname, count in sorted(file_counts.items(), key=lambda x: x[1], reverse=True):
             times_word = "time" if count == 1 else "times"
-            typer.echo(f"  {fname:<30} edited {count} {times_word}")
+            table.add_row(fname, f"{count} {times_word}")
+        console.print(table)
         return
         
     if stats:
@@ -246,14 +274,20 @@ def show_project(
             for c in s.commands:
                 cat = classify_command(c.command)
                 cmd_counts[cat] = cmd_counts.get(cat, 0) + 1
-        typer.echo(f"📊 Command Stats for project '{project.name}':")
+                
+        from rich.box import ROUNDED
+        table = Table(title=f"📊 Command Stats for project '{project.name}'", box=ROUNDED, border_style="cyan")
+        table.add_column("Command Category", style="cyan bold")
+        table.add_column("Count", justify="right", style="green")
+        
         for category, count in sorted(cmd_counts.items(), key=lambda x: x[1], reverse=True):
             display_cat = DISPLAY_NAMES.get(category, category)
-            typer.echo(f"  {display_cat:<20} {count} times")
+            table.add_row(display_cat, f"{count} times")
+        console.print(table)
         return
         
     output = format_project_output(sessions, project)
-    typer.echo(output)
+    console.print(output)
 
 @app.command("projects")
 def list_projects(
@@ -280,7 +314,85 @@ def list_projects(
         projects.sort(key=lambda p: p.total_time, reverse=True)
         
     output = format_projects_list(projects)
-    typer.echo(output)
+    console.print(output)
+
+@app.command("search")
+def search_history(
+    query: str = typer.Argument(..., help="Search term/query across commits, commands, and project names"),
+    project: Optional[str] = typer.Option(None, "--project", help="Filter matches by project name"),
+    since: Optional[str] = typer.Option(None, "--since", help="Filter matches since date YYYY-MM-DD"),
+    limit: int = typer.Option(50, "--limit", help="Maximum number of search results to return"),
+    detailed: bool = typer.Option(False, "--detailed", help="Show all commands and commits in matched sessions"),
+):
+    """Search across your work history (commits, commands, and projects)"""
+    db_path = get_db_path()
+    db = Database(db_path)
+    db.init_db()
+    
+    run_ingestion(db)
+    
+    since_ts = None
+    if since:
+        try:
+            since_ts = int(date_parser.parse(since).timestamp())
+        except Exception:
+            Console(stderr=True).print(f"[bold red]Error: Could not parse date '{since}'[/]")
+            raise typer.Exit(code=1)
+            
+    results = db.search_sessions(query, project_filter=project, since_ts=since_ts)
+    
+    # Limit results
+    results = results[:limit]
+    
+    output = format_search_results(query, results)
+    console.print(output)
+
+@app.command("insights")
+def show_insights(
+    days: int = typer.Option(30, "--days", help="Number of days to analyze history for insights"),
+):
+    """Analyze your history and surface focus scores, work patterns, and tool breakdown"""
+    db_path = get_db_path()
+    db = Database(db_path)
+    db.init_db()
+    
+    run_ingestion(db)
+    
+    # Calculate timeframe (last N days)
+    start_ts = int((get_current_time() - timedelta(days=days)).timestamp())
+    
+    # Retrieve all sessions in the range
+    sessions = db.get_range_sessions(start_ts, int(get_current_time().timestamp()))
+    
+    # Get associated projects for the sessions
+    project_ids = list(set(s.project_id for s in sessions if s.project_id is not None))
+    projects = db.get_projects_by_ids(project_ids)
+    
+    from termstory.insights import (
+        calculate_time_distribution,
+        calculate_time_of_day_distribution,
+        calculate_day_distribution,
+        calculate_focus_score,
+        detect_patterns_and_anomalies
+    )
+    
+    time_dist = calculate_time_distribution(sessions, projects)
+    tod_dist = calculate_time_of_day_distribution(sessions)
+    day_dist = calculate_day_distribution(sessions)
+    focus_score = calculate_focus_score(sessions)
+    patterns = detect_patterns_and_anomalies(sessions, projects)
+    
+    insights_data = {
+        "days": days,
+        "focus_score": focus_score,
+        "time_dist": time_dist,
+        "tod_dist": tod_dist,
+        "day_dist": day_dist,
+        "patterns": patterns
+    }
+    
+    output = format_insights_output(insights_data)
+    console.print(output)
 
 @app.callback(invoke_without_command=True)
 def main(
@@ -293,7 +405,7 @@ def main(
             date_parser.parse(date)
             os.environ["TERMSTORY_DATE_OVERRIDE"] = date
         except Exception:
-            typer.echo(f"Error: Invalid date format '{date}'", err=True)
+            Console(stderr=True).print(f"[bold red]Error: Invalid date format '{date}'[/]")
             raise typer.Exit(code=1)
             
     if ctx.invoked_subcommand is None:

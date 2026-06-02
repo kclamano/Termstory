@@ -107,3 +107,39 @@ def test_cli_week_and_month_commands(tmp_path, monkeypatch):
         assert "Apache HugeGraph" not in result.stdout
     finally:
         sys.argv = orig_argv
+
+def test_cli_search_and_insights_commands(tmp_path, monkeypatch):
+    db_file = tmp_path / "test_cli_search.db"
+    monkeypatch.setattr("termstory.cli.get_db_path", lambda: str(db_file))
+    monkeypatch.setattr("termstory.cli.get_history_files", lambda: [])
+    
+    db = Database(str(db_file))
+    db.init_db()
+    
+    now = int(time.time())
+    p = Project(id=1, name="Apache HugeGraph", path="~/projects/incubator-hugegraph", first_seen=now, last_seen=now, session_count=1, total_time=100)
+    cmd = Command(timestamp=now, command="docker run nginx", session_id=1, project_id=1)
+    s = Session(id=1, start_time=now, end_time=now + 100, duration_seconds=100, project_id=1, commands=[cmd])
+    db.save_data([p], [s], [cmd])
+    
+    # Save a commit
+    commits = [
+        {"hash": "1111111111111111111111111111111111111111", "timestamp": now, "message": "feat: Add docker health check", "cleaned_message": "Add docker health check"}
+    ]
+    db.save_commits(p.id, commits)
+    
+    runner = CliRunner()
+    
+    # Test search command
+    result = runner.invoke(app, ["search", "health"])
+    assert result.exit_code == 0
+    assert "Search Results" in result.stdout
+    assert "Apache HugeGraph" in result.stdout
+    assert "health" in result.stdout
+
+    # Test insights command
+    result = runner.invoke(app, ["insights"])
+    assert result.exit_code == 0
+    assert "Developer Insights" in result.stdout
+    assert "Focus Score" in result.stdout
+

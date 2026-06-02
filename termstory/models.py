@@ -42,6 +42,7 @@ class Session:
     duration_seconds: int       # Calculated: end_time - start_time
     project_id: Optional[int]   # FK to projects
     commands: List[Command] = field(default_factory=list) # Commands in this session
+    commits: List[Dict] = field(default_factory=list)     # Commits in this session
     
     @property
     def duration_readable(self) -> str:
