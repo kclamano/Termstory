@@ -942,3 +942,64 @@ def format_insights_output(insights: Dict) -> str:
         output_lines.append("")
         
     return render_to_string(Text.from_markup("\n".join(output_lines).strip()))
+
+
+def generate_daily_activity_punch_card(sessions: List[Session]) -> str:
+    """Generate a horizontal dynamic terminal activity punch-card strip based on command volume per hour."""
+    cmd_counts = [0] * 24
+    for s in sessions:
+        for c in s.commands:
+            dt = datetime.fromtimestamp(c.timestamp)
+            cmd_counts[dt.hour] += 1
+            
+    blocks = []
+    for count in cmd_counts:
+        if count == 0:
+            blocks.append("░")
+        elif count <= 10:
+            blocks.append("▒")
+        elif count <= 30:
+            blocks.append("▓")
+        else:
+            blocks.append("█")
+            
+    seg1 = "".join(blocks[0:6])
+    seg2 = "".join(blocks[6:12])
+    seg3 = "".join(blocks[12:18])
+    seg4 = "".join(blocks[18:24])
+    
+    return f"00:00 {seg1} 06:00 {seg2} 12:00 {seg3} 18:00 {seg4} 23:59"
+
+
+def get_operator_handle() -> str:
+    import subprocess
+    try:
+        res = subprocess.run(["git", "config", "github.user"], capture_output=True, text=True, check=False)
+        user = res.stdout.strip()
+        if user:
+            return f"@{user}"
+    except Exception:
+        pass
+    try:
+        res = subprocess.run(["git", "config", "remote.origin.url"], capture_output=True, text=True, check=False)
+        url = res.stdout.strip()
+        if url:
+            match = re.search(r'github\.com[:/]([^/]+)/', url)
+            if match:
+                return f"@{match.group(1)}"
+    except Exception:
+        pass
+    try:
+        res = subprocess.run(["git", "config", "user.name"], capture_output=True, text=True, check=False)
+        name = res.stdout.strip()
+        if name:
+            return f"@{name.replace(' ', '-').lower()}"
+    except Exception:
+        pass
+    try:
+        import os
+        return f"@{os.getlogin()}"
+    except Exception:
+        return "@developer"
+
+

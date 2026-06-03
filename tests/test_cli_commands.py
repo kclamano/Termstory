@@ -195,3 +195,67 @@ def test_cli_config_commands(tmp_path, monkeypatch):
     assert "ai_enabled" in result.stdout
 
 
+def test_cli_today_story(tmp_path, monkeypatch):
+    # Set mock time
+    monkeypatch.setenv("TERMSTORY_DATE_OVERRIDE", "2026-06-03 12:00:00")
+    
+    db_file = tmp_path / "test_cli_story.db"
+    monkeypatch.setattr("termstory.cli.get_db_path", lambda: str(db_file))
+    monkeypatch.setattr("termstory.config.get_db_path", lambda: str(db_file))
+    monkeypatch.setattr("termstory.cli.get_history_files", lambda: [])
+    
+    config_file = tmp_path / "config.json"
+    monkeypatch.setattr("termstory.config.get_config_path", lambda: str(config_file))
+    
+    db = Database(str(db_file))
+    db.init_db()
+    
+    from datetime import datetime
+    now = int(datetime(2026, 6, 3, 11, 0, 0).timestamp())
+    p = Project(id=1, name="Apache HugeGraph", path="~/projects/incubator-hugegraph", first_seen=now, last_seen=now, session_count=1, total_time=100)
+    cmd = Command(timestamp=now, command="docker run nginx", session_id=1, project_id=1)
+    s = Session(id=1, start_time=now, end_time=now + 100, duration_seconds=100, project_id=1, commands=[cmd])
+    db.save_data([p], [s], [cmd])
+    
+    runner = CliRunner()
+    
+    # Test --story with AI disabled (local/offline)
+    result = runner.invoke(app, ["today", "--story"])
+    assert result.exit_code == 0
+    assert "THE DAILY CHRONICLE" in result.stdout
+    assert "TODAY'S ACTIVITY PUNCH-CARD" in result.stdout
+    assert "Offline / Local Only" in result.stdout
+    
+    # Test --story with AI enabled
+    # Write config file enabling AI
+    config_data = {
+        "ai_enabled": True,
+        "active_provider": "ollama",
+        "providers": {
+            "ollama": {
+                "api_key": "",
+                "api_base_url": "http://localhost:11434/v1",
+                "model_name": "llama3"
+            }
+        }
+    }
+    with open(config_file, "w") as f:
+        import json
+        json.dump(config_data, f)
+        
+    called_ai = []
+    def mock_generate_daily_chronicle(*args, **kwargs):
+        called_ai.append(args)
+        return "✨ ACT I: THE MORNING SPRINT\nYou woke up and immediately chose violence."
+        
+    monkeypatch.setattr("termstory.ai.generate_daily_chronicle", mock_generate_daily_chronicle)
+    
+    result = runner.invoke(app, ["today", "--story"])
+    assert result.exit_code == 0
+    assert "THE DAILY CHRONICLE" in result.stdout
+    assert "Narrative Concluded" in result.stdout
+    assert "THE MORNING SPRINT" in result.stdout
+    assert len(called_ai) == 1
+
+
+

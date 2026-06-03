@@ -20,10 +20,11 @@ from textual.binding import Binding
 from termstory.models import Session, Project, Command, format_duration
 from termstory.database import Database
 from termstory.project import disambiguate_project_names
-from termstory.formatter import _is_noise_command, clean_command_to_memory
+from termstory.formatter import _is_noise_command, clean_command_to_memory, generate_daily_activity_punch_card, get_operator_handle
 from termstory.date_utils import get_current_time
 from termstory.config import load_config, save_config
-from termstory.ai import generate_ai_summary, generate_timeframe_summary
+from termstory.ai import generate_ai_summary, generate_timeframe_summary, generate_daily_chronicle
+from termstory.insights import calculate_focus_score, calculate_time_of_day_distribution
 
 
 # ==========================================
@@ -827,6 +828,139 @@ class DetailsCanvas(VerticalScroll):
                     
         self.mount(Vertical(*feed_widgets, classes="feed-container"))
 
+    def render_daily_chronicle_view(self, date_str: str, sessions: List[Session], projects: List[Project]) -> None:
+        """Render the beautiful Daily Chronicle view for a selected date."""
+        self.remove_children()
+        
+        operator = get_operator_handle()
+        day_dt = datetime.strptime(date_str, "%Y-%m-%d")
+        formatted_date = day_dt.strftime("%B %d, %Y")
+        
+        fs = int(calculate_focus_score(sessions) * 10)
+        tod = calculate_time_of_day_distribution(sessions)
+        peak_velocity = "morning grinds"
+        if tod.get("afternoon", 0) >= tod.get("morning", 0) and tod.get("afternoon", 0) >= tod.get("evening", 0):
+            peak_velocity = "afternoon compilation grinds"
+        elif tod.get("evening", 0) >= tod.get("morning", 0) and tod.get("evening", 0) >= tod.get("afternoon", 0):
+            peak_velocity = "late night grinds"
+            
+        punch_card = generate_daily_activity_punch_card(sessions)
+        
+        ai_enabled = self.app.config.get("ai_enabled", False)
+        provider = self.app.config.get("active_provider", "disabled")
+        
+        # Build the header block
+        header_lines = []
+        header_lines.append("[bold cyan]====================================================================[/]")
+        header_lines.append("[bold cyan]📖 termstory // THE DAILY CHRONICLE[/]")
+        header_lines.append("[bold cyan]====================================================================[/]")
+        
+        status_part = "Narrative Concluded" if (ai_enabled and provider != "disabled") else "Offline / Local Only"
+        header_lines.append(f"OPERATOR: [bold cyan]{operator:<20}[/]  │  DATE: [bold]{formatted_date}[/]")
+        header_lines.append(f"STATUS: {status_part:<22}  │  FOCUS SCORE: [bold green]{fs}/100[/]")
+        header_lines.append("[bold cyan]====================================================================[/]")
+        
+        self.mount(Static("\n".join(header_lines)))
+        
+        if not sessions:
+            self.mount(Static("\nNo terminal activity was logged today. Choose violence against technical debt tomorrow!"))
+            return
+            
+        # Mount Activity Punch-Card
+        punch_card_lines = []
+        punch_card_lines.append("\n[bold]📊 TODAY'S ACTIVITY PUNCH-CARD[/bold]")
+        punch_card_lines.append(f"[bold white]{punch_card}[/]")
+        punch_card_lines.append(f"[dim](Peak velocity detected during {peak_velocity})[/dim]\n")
+        self.mount(Static("\n".join(punch_card_lines)))
+        
+        # Now handle narrative story or fallback/generation options
+        narrative_widgets = []
+        
+        if ai_enabled and provider != "disabled":
+            cached_story = self.app.db.get_macro_summary(date_str)
+            if cached_story:
+                narrative_widgets.append(Static(Text(cached_story)))
+                
+                # Add a Regenerate button for the chronicle
+                btn_regen = Button("⟳ Regenerate Chronicle", id=f"btn-exec-{date_str}-date")
+                btn_regen.classes = "exec-btn"
+                narrative_widgets.append(btn_regen)
+            elif date_str in getattr(self.app, "generating_reviews", set()):
+                narrative_widgets.append(Static("⏳ [italic yellow]Generating Daily Chronicle... please wait[/italic yellow]\n"))
+            else:
+                # Add a button to generate the chronicle
+                narrative_widgets.append(Static("[dim]Ask AI to compile the chronological Story of You for this day:[/dim]"))
+                btn_gen = Button("✨ Generate Daily Chronicle", id=f"btn-exec-{date_str}-date")
+                btn_gen.classes = "exec-btn"
+                narrative_widgets.append(btn_gen)
+                
+            # Render bulk auto-summarization option if sessions are missing AI summaries
+            missing_sessions = [s for s in sessions if not s.ai_summary]
+            if missing_sessions:
+                bulk_widgets = []
+                bulk_progress = getattr(self.app, "bulk_running_timeframes", {})
+                
+                if date_str in bulk_progress:
+                    current, total = bulk_progress[date_str]
+                    bulk_widgets.append(Static(f"⏳ [bold yellow]Auto-summarizing sessions: {current}/{total} done...[/bold yellow]\n", id=f"bulk-status-{date_str}"))
+                else:
+                    bulk_widgets.append(Static(f"[dim]{len(missing_sessions)} sessions still need AI stories. Generate them all at once:[/dim]"))
+                    btn_bulk = Button(f"🚀 Auto-Summarize {len(missing_sessions)} Sessions", id=f"btn-bulk-{date_str}-date")
+                    btn_bulk.classes = "bulk-btn"
+                    bulk_widgets.append(btn_bulk)
+                narrative_widgets.append(Vertical(*bulk_widgets, classes="bulk-container"))
+        else:
+            narrative_widgets.append(Static(
+                "[dim]AI Narrative disabled. Press [bold]o[/bold] to configure AI Settings (Groq, OpenAI, Ollama).[/dim]\n"
+            ))
+            
+        self.mount(Vertical(*narrative_widgets, classes="chronicle-container"))
+        
+        # Always mount the Activity Feed at the bottom of the chronicle view
+        feed_widgets = [Static("\n[bold]Activity Feed[/bold]", classes="section-title")]
+        display_names = disambiguate_project_names(projects)
+        project_map = {p.id: p for p in projects if p.id is not None}
+        
+        for s in sorted(sessions, key=lambda x: x.start_time):
+            proj = project_map.get(s.project_id)
+            proj_name = display_names.get(s.project_id, "Other") if proj else "Other"
+            if proj_name == "General / No Project":
+                proj_name = "Other"
+            dur_str = format_duration(s.duration_seconds)
+            start_time_str = s.start_time_formatted
+            
+            item_text = Text()
+            item_text.append(f"• {start_time_str} ", style="dim")
+            item_text.append(f"{proj_name} ", style="bold cyan" if proj_name != "Other" else "bold green")
+            item_text.append(f"({dur_str})\n", style="dim")
+            feed_widgets.append(Static(item_text))
+            
+            # Show summary or generate button
+            if getattr(s, "is_generating_story", False):
+                if s.ai_summary:
+                    feed_widgets.append(Static(f"  └─ ✨ {strip_ansi(s.ai_summary)}"))
+                feed_widgets.append(Static("  └─ ⏳ [italic yellow]Thinking...[/italic yellow]\n"))
+            elif s.ai_summary:
+                feed_widgets.append(Static(f"  └─ ✨ {strip_ansi(s.ai_summary)}"))
+                if ai_enabled and provider != "disabled" and not getattr(s, "recent_generation", False):
+                    btn = Button("⟳ Regenerate", id=f"btn-gen-session-{s.id}")
+                    btn.classes = "gen-story-btn small-btn"
+                    row = Horizontal(Static("      "), btn, classes="btn-row")
+                    feed_widgets.append(row)
+                else:
+                    feed_widgets.append(Static("\n"))
+            else:
+                if ai_enabled and provider != "disabled":
+                    btn = Button("✨ Generate Story", id=f"btn-gen-session-{s.id}")
+                    btn.classes = "gen-story-btn"
+                    row = Horizontal(Static("  └─ "), btn, classes="btn-row")
+                    feed_widgets.append(row)
+                else:
+                    heur = get_session_memory_str(s)
+                    feed_widgets.append(Static(f"  └─ {heur}\n"))
+                    
+        self.mount(Vertical(*feed_widgets, classes="feed-container"))
+
     def render_session_details(self, project: Optional[Project], session: Session) -> None:
         self.remove_children()
         
@@ -1343,14 +1477,28 @@ class TermStoryWorkspace(App):
         self.generating_reviews.add(timeframe_id)
         self.call_from_thread(self.refresh_details_canvas)
         
-        from termstory.ai import generate_timeframe_summary
-        summary = generate_timeframe_summary(
-            stats_summary=stats_summary,
-            api_key=api_key,
-            api_base_url=api_base_url,
-            model_name=model_name,
-            provider=provider
-        )
+        if timeframe_type == "date":
+            operator = get_operator_handle()
+            matched_sessions = [s for s in self.sessions if s.date_str == timeframe_id]
+            from termstory.ai import generate_daily_chronicle
+            summary = generate_daily_chronicle(
+                github_username=operator,
+                session_date=timeframe_id,
+                sessions=matched_sessions,
+                projects=self.projects,
+                api_key=api_key,
+                api_base_url=api_base_url,
+                model_name=model_name,
+                provider=provider
+            )
+        else:
+            summary = generate_timeframe_summary(
+                stats_summary=stats_summary,
+                api_key=api_key,
+                api_base_url=api_base_url,
+                model_name=model_name,
+                provider=provider
+            )
         
         self.generating_reviews.discard(timeframe_id)
         if summary:
@@ -1572,9 +1720,7 @@ class TermStoryWorkspace(App):
         elif node_type == "date":
             date_str = node_data["date_str"]
             matched = [s for s in self.sessions if s.date_str == date_str]
-            day_dt = datetime.strptime(date_str, "%Y-%m-%d")
-            day_label = day_dt.strftime("%b %d (%a)")
-            canvas.render_time_summary(f"📅 Daily Overview ({day_label})", matched, self.projects, timeframe_id=date_str, timeframe_type="date")
+            canvas.render_daily_chronicle_view(date_str, matched, self.projects)
             
         elif node_type == "project":
             project_id = node_data["project_id"]

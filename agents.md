@@ -107,6 +107,14 @@ Interfaces with LLMs using Python's native `urllib.request`.
   - **Tree Explorer Cleanups**: Hid the redundant `"Timeline Explorer"` tree root node via constructor args, zeroed margins and tree padding, and centered the footer shortcuts.
 * **Files**: [tui.py](file:///Users/himanshuverma/Projects/termstory/termstory/tui.py), [ai.py](file:///Users/himanshuverma/Projects/termstory/termstory/ai.py), [test_tui.py](file:///Users/himanshuverma/Projects/termstory/tests/test_tui.py), [test_ai.py](file:///Users/himanshuverma/Projects/termstory/tests/test_ai.py).
 
+### 📖 Phase 5: Upgraded Daily AI System Prompt & TUI Chronicle Integration
+* **Status**: Fully implemented, integrated, and verified.
+* **Features**:
+  - **Narrative Daily Chronicle**: Embedded the upgraded "Story of You" system prompt in [ai.py](file:///Users/himanshuverma/Projects/termstory/termstory/ai.py) utilizing second-person narrative ("You"), dynamic GitHub handle resolution, inferred breaks, and ASCII connection formatting.
+  - **Activity Punch-Card**: Integrated a dynamic horizontal activity punch-card visual strip (`00:00 ░░░░░ 06:00 ... 23:59`) based on hourly command intensity counts.
+  - **TUI Integration**: Completely unified the Daily Chronicle inside `termstory ui`'s `DetailsCanvas` when date nodes are selected, maintaining standard session detail feeds at the bottom for full visibility and single-session interactions.
+* **Files**: [tui.py](file:///Users/himanshuverma/Projects/termstory/termstory/tui.py), [ai.py](file:///Users/himanshuverma/Projects/termstory/termstory/ai.py), [formatter.py](file:///Users/himanshuverma/Projects/termstory/termstory/formatter.py), [cli.py](file:///Users/himanshuverma/Projects/termstory/termstory/cli.py).
+
 ---
 
 ## 4. Running Verification

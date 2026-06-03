@@ -387,7 +387,12 @@ async def test_tui_generate_executive_review(monkeypatch):
             called.append(stats_summary)
             return "Generated Executive Review text."
             
+        def mock_generate_daily_chronicle(github_username, session_date, sessions, projects, api_key, api_base_url, model_name, provider):
+            called.append(session_date)
+            return "Generated Executive Review text."
+            
         monkeypatch.setattr("termstory.ai.generate_timeframe_summary", mock_generate_timeframe_summary)
+        monkeypatch.setattr("termstory.ai.generate_daily_chronicle", mock_generate_daily_chronicle)
         
         async with app.run_test(size=(120, 40)) as pilot:
             await pilot.pause()
@@ -397,6 +402,12 @@ async def test_tui_generate_executive_review(monkeypatch):
             app.query_one(f"#btn-exec-{date_str}-date").press()
             await pilot.pause()
             
+            import asyncio
+            for _ in range(50):
+                if len(called) == 1:
+                    break
+                await asyncio.sleep(0.05)
+                
             assert len(called) == 1
             cached = db.get_macro_summary(date_str)
             assert cached == "Generated Executive Review text."

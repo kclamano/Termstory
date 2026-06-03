@@ -84,6 +84,7 @@ def show_today(
     detailed: bool = typer.Option(False, "--detailed", help="Show all commands in sessions"),
     compare: bool = typer.Option(False, "--compare", help="Compare with yesterday's work"),
     stats: bool = typer.Option(False, "--stats", help="Show detailed command breakdown stats"),
+    story: bool = typer.Option(False, "--story", help="Generate daily AI chronicle narrative story"),
 ):
     """Display today's sessions, projects, and command statistics"""
     db_path = get_db_path()
@@ -98,6 +99,85 @@ def show_today(
     project_ids = list(set(s.project_id for s in today_sessions if s.project_id is not None))
     today_projects = db.get_projects_by_ids(project_ids)
     
+    if story:
+        from termstory.config import load_config
+        from termstory.formatter import generate_daily_activity_punch_card, get_operator_handle
+        from termstory.insights import calculate_focus_score, calculate_time_of_day_distribution
+        import re
+        
+        operator = get_operator_handle()
+        date_str = get_current_time().strftime("%B %d, %Y")
+        
+        if not today_sessions:
+            console.print("====================================================================")
+            console.print("📖 termstory // THE DAILY CHRONICLE")
+            console.print("====================================================================")
+            console.print(f"OPERATOR: {operator:<20} |  DATE: {date_str}")
+            console.print("STATUS: No Activity            |  FOCUS SCORE: 0/100")
+            console.print("====================================================================")
+            console.print("\nNo terminal activity was logged today. Choose violence against technical debt tomorrow!")
+            return
+            
+        fs = int(calculate_focus_score(today_sessions) * 10)
+        tod = calculate_time_of_day_distribution(today_sessions)
+        peak_velocity = "morning grinds"
+        if tod.get("afternoon", 0) >= tod.get("morning", 0) and tod.get("afternoon", 0) >= tod.get("evening", 0):
+            peak_velocity = "afternoon compilation grinds"
+        elif tod.get("evening", 0) >= tod.get("morning", 0) and tod.get("evening", 0) >= tod.get("afternoon", 0):
+            peak_velocity = "late night grinds"
+            
+        punch_card = generate_daily_activity_punch_card(today_sessions)
+        
+        console.print("====================================================================")
+        console.print("📖 termstory // THE DAILY CHRONICLE")
+        console.print("====================================================================")
+        console.print(f"OPERATOR: {operator:<20} |  DATE: {date_str}")
+        
+        config = load_config()
+        ai_enabled = config.get("ai_enabled", False)
+        provider = config.get("active_provider", "disabled")
+        
+        if ai_enabled and provider != "disabled":
+            console.print(f"STATUS: Narrative Concluded     |  FOCUS SCORE: {fs}/100")
+            console.print("====================================================================")
+            console.print("\n📊 TODAY'S ACTIVITY PUNCH-CARD")
+            console.print(punch_card)
+            console.print(f"(Peak velocity detected during {peak_velocity})\n")
+            
+            prov_config = config.get("providers", {}).get(provider, {})
+            api_key = prov_config.get("api_key", "")
+            api_base_url = prov_config.get("api_base_url", "")
+            model_name = prov_config.get("model_name", "")
+            
+            from termstory.ai import generate_daily_chronicle
+            story_text = generate_daily_chronicle(
+                github_username=operator,
+                session_date=date_str,
+                sessions=today_sessions,
+                projects=today_projects,
+                api_key=api_key,
+                api_base_url=api_base_url,
+                model_name=model_name,
+                provider=provider
+            )
+            if story_text:
+                console.print(story_text)
+            else:
+                console.print("[Failed to generate AI story. Returning local summary.]\n")
+                output = format_today_output(today_sessions, today_projects)
+                console.print(output)
+        else:
+            console.print(f"STATUS: Offline / Local Only    |  FOCUS SCORE: {fs}/100")
+            console.print("====================================================================")
+            console.print("\n📊 TODAY'S ACTIVITY PUNCH-CARD")
+            console.print(punch_card)
+            console.print(f"(Peak velocity detected during {peak_velocity})\n")
+            
+            console.print("[AI Narrative disabled. Run 'termstory config set active_provider' to configure Groq/OpenAI/Ollama.]\n")
+            output = format_today_output(today_sessions, today_projects)
+            console.print(output)
+        return
+
     if detailed:
         output = format_detailed_sessions(today_sessions)
         console.print(output)
@@ -498,7 +578,7 @@ def main(
             
     if ctx.invoked_subcommand is None:
         # No subcommand, fallback to today's report
-        show_today(detailed=False, compare=False, stats=False)
+        show_today(detailed=False, compare=False, stats=False, story=False)
 
 if __name__ == "__main__":
     app()

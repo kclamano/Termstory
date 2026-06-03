@@ -252,3 +252,27 @@ def test_ai_summary_with_commits(monkeypatch):
     assert res == "Summary with commits."
 
 
+def test_daily_chronicle_prompt():
+    from termstory.ai import generate_daily_chronicle_prompt
+    from termstory.models import Session, Command, Project
+    
+    cmd = Command(timestamp=1780460000, command="vim main.py")
+    s = Session(id=1, start_time=1780460000, end_time=1780461000, duration_seconds=1000, project_id=1, commands=[cmd])
+    p = Project(id=1, name="TermStory", path="~/projects/termstory", first_seen=1780460000, last_seen=1780461000, session_count=1, total_time=1000)
+    
+    prompt = generate_daily_chronicle_prompt(
+        github_username="@testuser",
+        session_date="June 03, 2026",
+        sessions=[s],
+        projects=[p]
+    )
+    
+    assert "@testuser" in prompt
+    assert "June 03, 2026" in prompt
+    assert "USE SECOND-PERSON" in prompt
+    assert "DYNAMIC HANDLE" in prompt
+    assert "INFER HUMANITY" in prompt
+    assert "NO CORPORATE SLOP" in prompt
+
+
+

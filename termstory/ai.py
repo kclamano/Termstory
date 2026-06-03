@@ -157,3 +157,117 @@ def generate_timeframe_summary(
     )
     
     return _send_llm_request(prompt, api_key, api_base_url, model_name, provider)
+
+
+def generate_daily_chronicle_prompt(
+    github_username: str,
+    session_date: str,
+    sessions: List,
+    projects: List
+) -> str:
+    """Generate the Daily Chronicle AI prompt detailing sessions, commands, and inferred gaps."""
+    from datetime import datetime
+    from termstory.models import format_duration
+    from termstory.formatter import _is_noise_command
+    
+    project_map = {p.id: p.name for p in projects if p.id is not None}
+    chrono_lines = []
+    
+    for idx, s in enumerate(sessions):
+        start_str = datetime.fromtimestamp(s.start_time).strftime("%H:%M")
+        end_str = datetime.fromtimestamp(s.end_time).strftime("%H:%M")
+        duration_str = format_duration(s.duration_seconds)
+        proj_name = project_map.get(s.project_id, "Other")
+        if proj_name == "General / No Project":
+            proj_name = "Other"
+            
+        chrono_lines.append(f"SESSION: [{start_str} - {end_str}] ({duration_str})")
+        chrono_lines.append(f"PROJECT: {proj_name}")
+        
+        # Git commits
+        if s.commits:
+            chrono_lines.append("GIT COMMITS:")
+            for c in s.commits:
+                msg = c.get("cleaned_message") or c.get("message") or ""
+                chrono_lines.append(f"  - {msg}")
+                
+        # Commands (filter noise)
+        cmds = [cmd.command for cmd in s.commands if not _is_noise_command(cmd.command)]
+        if cmds:
+            chrono_lines.append("COMMANDS:")
+            for cmd in cmds[:15]:
+                chrono_lines.append(f"  - {cmd}")
+                
+        chrono_lines.append("")
+        
+        # Check for gap between this session and the next one
+        if idx < len(sessions) - 1:
+            next_s = sessions[idx + 1]
+            gap_seconds = next_s.start_time - s.end_time
+            if gap_seconds >= 600: # 10 minutes or more
+                gap_hours = gap_seconds // 3600
+                gap_mins = (gap_seconds % 3600) // 60
+                gap_str = []
+                if gap_hours > 0:
+                    gap_str.append(f"{gap_hours} hour{'s' if gap_hours > 1 else ''}")
+                if gap_mins > 0:
+                    gap_str.append(f"{gap_mins} minute{'s' if gap_mins > 1 else ''}")
+                gap_display = " and ".join(gap_str) if gap_str else f"{gap_seconds} seconds"
+                
+                s_end_str = datetime.fromtimestamp(s.end_time).strftime("%H:%M")
+                next_start_str = datetime.fromtimestamp(next_s.start_time).strftime("%H:%M")
+                
+                chrono_lines.append(f"[INFERRED BREAK]: Gap of {gap_display} (from {s_end_str} to {next_start_str})")
+                chrono_lines.append("")
+                
+    chrono_blocks = "\n".join(chrono_lines)
+    
+    prompt = (
+        "You are the core narrator for termstory, a developer memory engine. Your job is to translate raw shell history, git telemetry, and time-gap inferences into a non-boring, hyper-perceptive \"Story of You\" for a single day.\n\n"
+        "YOUR CORE RULES:\n"
+        "1. USE SECOND-PERSON: Address the developer directly as \"You\" (e.g., \"You stepped into the arena at...\" or \"You woke up and immediately chose violence...\").\n"
+        "2. DYNAMIC HANDLE: Always open the log using the provided GitHub handle (e.g., @username).\n"
+        "3. INFER HUMANITY: Use the gap markers (like [INFERRED BREAK]) to build a narrative arc. If they are in a failing test loop, call out the grit and frustration with dry humor.\n"
+        "4. NO CORPORATE SLOP: Absolutely no generic wrap-ups (\"All in all, it was a productive day!\"). Keep it grounded, technical, and slightly sarcastic.\n"
+        "5. FORMATTING: Use high-density terminal ASCII layouts (├─, 🧊, █) for session details.\n\n"
+        "OUTPUT FORMAT EXTREME REQUIREMENT:\n"
+        "Generate exactly the chronological acts of the day, inferred breaks, and the final VERDICT block. Only return the raw text. Do not wrap in markdown fences or add any preamble/postamble.\n\n"
+        "Example Output:\n"
+        "🌅 ACT I: THE MORNING SPRINT [09:15 - 11:45]\n"
+        "You woke up and immediately chose violence against technical debt.\n"
+        "├─ 📂 Project: Apache HugeGraph (`feature/hugegraph-indexing`)\n"
+        "├─ ⌨️  Action:  Fired up Neovim and spent 2.5 hours editing `store.go`.\n"
+        "└─ 🧠 Insight: You cleanly refactored the concurrent B-Tree traversal.\n\n"
+        "🍕 THE INTERMISSION [11:45 - 13:12]\n"
+        "[Inferred Break]: You dropped off the grid for 1 hour and 27 minutes.\n"
+        "The engine assumes you went to fetch lunch or stared blankly at a wall.\n\n"
+        "====================================================================\n"
+        "[VERDICT] You clocked 6h 18m of active terminal focus. You smashed your testing bottlenecks and left the codebase more secure than you found it.\n"
+        "====================================================================\n\n"
+        "Input Data Payload:\n"
+        f"USER_HANDLE: {github_username}\n"
+        f"DATE: {session_date}\n"
+        "CHRONO_BLOCKS:\n"
+        f"{chrono_blocks}\n\n"
+        "Output format: Return ONLY the raw, polished daily chronicle acts and verdict block. No markdown formatting, no conversational filler, and no surrounding quotes."
+    )
+    return prompt
+
+
+def generate_daily_chronicle(
+    github_username: str,
+    session_date: str,
+    sessions: List,
+    projects: List,
+    api_key: str,
+    api_base_url: str,
+    model_name: str,
+    provider: str
+) -> Optional[str]:
+    """Scrub inputs, build prompt, and call LLM chat completions endpoint to generate the Daily Chronicle."""
+    if provider == "disabled" or not sessions:
+        return None
+        
+    prompt = generate_daily_chronicle_prompt(github_username, session_date, sessions, projects)
+    return _send_llm_request(prompt, api_key, api_base_url, model_name, provider)
+
