@@ -479,7 +479,7 @@ class StatsHeader(Static):
         )
 
 
-class HistoryTree(Tree):
+class NavigationTree(Tree):
     """Collapsible date-grouped navigation timeline supporting Vim keys."""
     
     BINDINGS = [
@@ -543,9 +543,13 @@ class HistoryTree(Tree):
                     p_name = "Other"
                 return (0, p_name.lower())
 
+            timeline_root = self.root.add("📅 Timeline", data={"type": "category", "category": "timeline"}, expand=True)
+            self.root.add("📁 Projects", data={"type": "category", "category": "projects"}, expand=False)
+            self.root.add("🧠 Insights", data={"type": "category", "category": "insights"}, expand=False)
+
             for m_key in sorted_months:
                 month_dt = datetime.strptime(m_key, "%B %Y")
-                month_node = self.root.add(
+                month_node = timeline_root.add(
                     m_key,
                     data={"type": "month", "year": month_dt.year, "month": month_dt.month},
                     expand=True
@@ -735,7 +739,7 @@ class DetailsCanvas(VerticalScroll):
             
             cached_exec = self.app.db.get_macro_summary(timeframe_id)
             if cached_exec:
-                exec_widgets.append(Static(f"✨ {cached_exec}\n"))
+                exec_widgets.append(Static(f"{cached_exec}\n"))
             elif timeframe_id in getattr(self.app, "generating_reviews", set()):
                 exec_widgets.append(Static("⏳ [italic yellow]Generating Timeframe Summary... please wait[/italic yellow]\n"))
             else:
@@ -1292,7 +1296,7 @@ class TermStoryWorkspace(App):
         with Grid(id="master-layout"):
             yield StatsHeader(id="stats-panel")
             with Vertical(id="tree-container"):
-                yield HistoryTree("Timeline Explorer", id="history-navigator")
+                yield NavigationTree("TermStory Explorer", id="history-navigator")
                 yield Input(placeholder="Search sessions... (Esc to clear)", id="search-box")
             yield DetailsCanvas(id="details-canvas")
         yield Footer()
@@ -1330,12 +1334,19 @@ class TermStoryWorkspace(App):
         all_date_nodes = []
         target_node = None
         
-        for m_node in tree.root.children:
-            m_node.expand()
-            for d_node in m_node.children:
-                all_date_nodes.append(d_node)
-                if d_node.data and d_node.data.get("date_str") == today_str:
-                    target_node = d_node
+        timeline_root = None
+        for child in tree.root.children:
+            if child.data and child.data.get("category") == "timeline":
+                timeline_root = child
+                break
+                
+        if timeline_root:
+            for m_node in timeline_root.children:
+                m_node.expand()
+                for d_node in m_node.children:
+                    all_date_nodes.append(d_node)
+                    if d_node.data and d_node.data.get("date_str") == today_str:
+                        target_node = d_node
                     
         if not target_node and all_date_nodes:
             target_node = all_date_nodes[0]
@@ -1711,7 +1722,18 @@ class TermStoryWorkspace(App):
             return
             
         node_type = node_data.get("type")
-        if node_type == "month":
+        if node_type == "category":
+            category = node_data.get("category")
+            if category == "timeline":
+                canvas.render_time_summary("📊 Overall Dashboard Summary", self.sessions, self.projects, timeframe_id="overall", timeframe_type="overall")
+            elif category == "projects":
+                canvas.remove_children()
+                canvas.mount(Static("\n\n[bold yellow]🚧 Under Construction: Projects View[/bold yellow]\n[dim]This section will provide a dedicated view for project tracking.[/dim]", id="under-construction"))
+            elif category == "insights":
+                canvas.remove_children()
+                canvas.mount(Static("\n\n[bold yellow]🚧 Under Construction: Insights View[/bold yellow]\n[dim]This section will provide high-level work analytics and focus scoring.[/dim]", id="under-construction"))
+                
+        elif node_type == "month":
             year = node_data["year"]
             month = node_data["month"]
             matched = [s for s in self.sessions if s.date_str.startswith(f"{year}-{month:02d}")]

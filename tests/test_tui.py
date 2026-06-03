@@ -102,22 +102,27 @@ async def test_tui_workspace_mount():
             assert app.query_one("#search-box") is not None
             
             # Verify the 4-level hierarchy structure
-            # Root node has children (Level 1: Month nodes)
-            assert len(tree.root.children) > 0
-            month_node = tree.root.children[0]
+            # Root node has children (Level 1: Categories)
+            assert len(tree.root.children) == 3
+            timeline_root = tree.root.children[0]
+            assert timeline_root.data["category"] == "timeline"
+            
+            # Timeline node has children (Level 2: Month nodes)
+            assert len(timeline_root.children) > 0
+            month_node = timeline_root.children[0]
             assert month_node.data["type"] == "month"
             
-            # Month node has children (Level 2: Date nodes)
+            # Month node has children (Level 3: Date nodes)
             assert len(month_node.children) > 0
             date_node = month_node.children[0]
             assert date_node.data["type"] == "date"
             
-            # Date node has children (Level 3: Project nodes)
+            # Date node has children (Level 4: Project nodes)
             assert len(date_node.children) > 0
             project_node = date_node.children[0]
             assert project_node.data["type"] == "project"
             
-            # Project node has children (Level 4: Session nodes)
+            # Project node has children (Level 5: Session nodes)
             assert len(project_node.children) > 0
             session_node = project_node.children[0]
             assert session_node.data["type"] == "session"

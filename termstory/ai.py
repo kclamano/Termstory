@@ -38,7 +38,7 @@ def _send_llm_request(
             }
         ],
         "temperature": 0.0,
-        "max_tokens": 150
+        "max_tokens": 500
     }
     
     req_data = json.dumps(body).encode("utf-8")
