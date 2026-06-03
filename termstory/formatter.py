@@ -1232,6 +1232,10 @@ def get_github_avatar_ascii(username: str, width: int = 12, height: int = 7, on_
             avg_corner = sum(corners) / len(corners)
             should_invert = (avg_corner > 127)
             
+            # Count unique colors in a 16x16 NEAREST resampled image to bypass antialiasing
+            img_small = img.resize((16, 16), Image.Resampling.NEAREST)
+            unique_colors = len(set(img_small.getdata()))
+            
             # Equalize histogram to balance contrast and details
             img = ImageOps.equalize(img)
             
@@ -1242,16 +1246,43 @@ def get_github_avatar_ascii(username: str, width: int = 12, height: int = 7, on_
             # Resize to (width * 2) x (height * 4) for Braille dots
             img = img.resize((width * 2, height * 4), Image.Resampling.BILINEAR)
             
+            # Determine method based on complexity (threshold <= 24, dither > 24)
+            use_dither = (unique_colors > 24)
+            
             # Map pixels to binary grid
             pixels = []
-            for y in range(height * 4):
-                row = []
-                for x in range(width * 2):
-                    val = img.getpixel((x, y))
-                    if should_invert:
-                        val = 255 - val
-                    row.append(1 if val >= 127 else 0)
-                pixels.append(row)
+            if not use_dither:
+                # Flat graphics / identicons: Static thresholding at 127
+                for y in range(height * 4):
+                    row = []
+                    for x in range(width * 2):
+                        val = img.getpixel((x, y))
+                        if should_invert:
+                            val = 255 - val
+                        row.append(1 if val >= 127 else 0)
+                    pixels.append(row)
+            else:
+                # Photos / complex gradients: 8x8 Bayer ordered dithering
+                bayer_matrix_8x8 = [
+                    [ 0, 48, 12, 60,  3, 51, 15, 63],
+                    [32, 16, 44, 28, 35, 19, 47, 31],
+                    [ 8, 56,  4, 52, 11, 59,  7, 55],
+                    [40, 24, 36, 20, 43, 27, 39, 23],
+                    [ 2, 50, 14, 62,  1, 49, 13, 61],
+                    [34, 18, 46, 30, 33, 17, 45, 29],
+                    [10, 58,  6, 54,  9, 57,  5, 53],
+                    [42, 26, 38, 22, 41, 25, 37, 21]
+                ]
+                for y in range(height * 4):
+                    row = []
+                    for x in range(width * 2):
+                        val = img.getpixel((x, y))
+                        if should_invert:
+                            val = 255 - val
+                        # Scale 0-63 to 0-255 using (val + 0.5) * 4
+                        threshold = int((bayer_matrix_8x8[y % 8][x % 8] + 0.5) * 4)
+                        row.append(1 if val >= threshold else 0)
+                    pixels.append(row)
                 
             # Construct characters using Braille dots:
             # 1 4
