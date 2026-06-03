@@ -14,6 +14,7 @@ setup(
         "python-dateutil>=2.8.2",
         "rich>=13.0.0",
         "textual>=0.50.0",
+        "pillow>=10.0.0",
     ],
     entry_points={
         "console_scripts": [

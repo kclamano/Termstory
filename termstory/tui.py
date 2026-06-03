@@ -20,7 +20,7 @@ from textual.binding import Binding
 from termstory.models import Session, Project, Command, format_duration
 from termstory.database import Database
 from termstory.project import disambiguate_project_names
-from termstory.formatter import _is_noise_command, clean_command_to_memory, generate_daily_activity_punch_card, get_operator_handle
+from termstory.formatter import _is_noise_command, clean_command_to_memory, generate_daily_activity_punch_card, get_operator_handle, get_github_avatar_ascii
 from termstory.date_utils import get_current_time
 from termstory.config import load_config, save_config
 from termstory.ai import generate_ai_summary, generate_timeframe_summary, generate_daily_chronicle
@@ -326,6 +326,13 @@ class OnboardingScreen(ModalScreen[dict]):
         base_url = provider_config.get("api_base_url", "")
         model_name = provider_config.get("model_name", "")
         
+        github_username = self.config.get("github_username", "")
+        if not github_username:
+            from termstory.formatter import get_operator_handle
+            github_username = get_operator_handle().lstrip('@')
+            if github_username.lower() in ("developer", "other", "general"):
+                github_username = ""
+            
         yield Vertical(
             Static("🔒 TermStory Privacy & AI Onboarding", id="modal-title"),
             Static(
@@ -345,6 +352,7 @@ class OnboardingScreen(ModalScreen[dict]):
                 id="modal-provider-selector"
             ),
             Vertical(
+                Input(value=github_username, placeholder="GitHub Username (for ASCII avatar)...", id="input-github-username"),
                 Input(value=api_key, placeholder="API Key...", password=True, id="input-api-key"),
                 Input(value=base_url, placeholder="API Base URL...", id="input-base-url"),
                 Input(value=model_name, placeholder="Model Name...", id="input-model-name"),
@@ -399,6 +407,8 @@ class OnboardingScreen(ModalScreen[dict]):
         self.update_provider_ui("custom")
         
     def action_choose_disabled(self) -> None:
+        github_username = self.query_one("#input-github-username").value.strip().lstrip('@')
+        self.config["github_username"] = github_username
         self.config["ai_enabled"] = False
         self.config["active_provider"] = "disabled"
         self.config["has_seen_onboarding"] = True
@@ -431,6 +441,7 @@ class OnboardingScreen(ModalScreen[dict]):
             api_key = self.query_one("#input-api-key").value.strip()
             base_url = self.query_one("#input-base-url").value.strip()
             model_name = self.query_one("#input-model-name").value.strip()
+            github_username = self.query_one("#input-github-username").value.strip().lstrip('@')
             
             if not base_url:
                 if self.selected_provider == "groq":
@@ -449,12 +460,15 @@ class OnboardingScreen(ModalScreen[dict]):
             self.config["providers"][self.selected_provider]["api_base_url"] = base_url
             self.config["providers"][self.selected_provider]["model_name"] = model_name
             
+            self.config["github_username"] = github_username
             self.config["ai_enabled"] = True
             self.config["active_provider"] = self.selected_provider
             self.config["has_seen_onboarding"] = True
             
             self.dismiss(self.config)
         elif button_id == "btn-disable-ai":
+            github_username = self.query_one("#input-github-username").value.strip().lstrip('@')
+            self.config["github_username"] = github_username
             self.config["ai_enabled"] = False
             self.config["active_provider"] = "disabled"
             self.config["has_seen_onboarding"] = True
@@ -674,39 +688,50 @@ class DetailsCanvas(VerticalScroll):
         active_projects_count = len(active_project_ids)
         total_commits = sum(len(s.commits) for s in sessions)
         
-        # 1. Title & Hero stats
-        elements = [Text.from_markup(f"[bold white]{title}[/bold white]\n")]
+        # Build side-by-side header block just like the daily chronicle
+        operator = get_operator_handle()
+        fs = int(calculate_focus_score(sessions) * 10)
+        tod = calculate_time_of_day_distribution(sessions)
+        peak_velocity = "morning grinds"
+        if tod.get("afternoon", 0) >= tod.get("morning", 0) and tod.get("afternoon", 0) >= tod.get("evening", 0):
+            peak_velocity = "afternoon compilation grinds"
+        elif tod.get("evening", 0) >= tod.get("morning", 0) and tod.get("evening", 0) >= tod.get("afternoon", 0):
+            peak_velocity = "late night grinds"
+            
+        ai_enabled = self.app.config.get("ai_enabled", False)
+        provider = self.app.config.get("active_provider", "disabled")
+        status_part = "Narrative Concluded" if (ai_enabled and provider != "disabled") else "Offline / Local Only"
         
-        card1 = Panel(
-            Text.from_markup(f"[bold cyan]{total_time_str}[/]\n[dim]Total Time Logged[/]"),
-            border_style="bright_black",
-            padding=(0, 2),
-            expand=True
-        )
-        card2 = Panel(
-            Text.from_markup(f"[bold cyan]{active_projects_count}[/]\n[dim]Active Projects[/]"),
-            border_style="bright_black",
-            padding=(0, 2),
-            expand=True
-        )
-        card3 = Panel(
-            Text.from_markup(f"[bold cyan]{total_commits}[/]\n[dim]Git Commits[/]"),
-            border_style="bright_black",
-            padding=(0, 2),
-            expand=True
+        # Fetch GitHub avatar ASCII lines (28x14)
+        avatar_lines = get_github_avatar_ascii(
+            operator, 
+            width=28, 
+            height=14, 
+            on_resolved=lambda: self.app.call_from_thread(self.refresh_details_canvas)
         )
         
-        cards_table = Table(box=None, show_header=False, padding=0, expand=True)
-        cards_table.add_column("c1", ratio=1)
-        cards_table.add_column("c2", ratio=1)
-        cards_table.add_column("c3", ratio=1)
-        cards_table.add_row(card1, card2, card3)
+        active_days_count = len({s.date_str for s in sessions if s.start_time})
         
-        elements.append(cards_table)
-        elements.append(Text("\n"))
+        header_lines = []
+        header_lines.append(f"[bold cyan]{avatar_lines[0]}[/]     [bold cyan]📖 termstory // {title.upper()}[/]")
+        header_lines.append(f"[bold cyan]{avatar_lines[1]}[/]     [bold cyan]====================================================[/]")
+        header_lines.append(f"[bold cyan]{avatar_lines[2]}[/]     [bold cyan]OPERATOR:[/]        [bold cyan]@{operator.lstrip('@')}[/]")
+        header_lines.append(f"[bold cyan]{avatar_lines[3]}[/]     [bold cyan]TIMEFRAME:[/]       [bold]{title}[/]")
+        header_lines.append(f"[bold cyan]{avatar_lines[4]}[/]     [bold cyan]STATUS:[/]          [dim]{status_part}[/]")
+        header_lines.append(f"[bold cyan]{avatar_lines[5]}[/]     [bold cyan]FOCUS TIME:[/]      [bold]{total_time_str}[/]")
+        header_lines.append(f"[bold cyan]{avatar_lines[6]}[/]     [bold cyan]ACTIVE DAYS:[/]     [bold]{active_days_count} days[/]")
+        header_lines.append(f"[bold cyan]{avatar_lines[7]}[/]     [bold cyan]FOCUS SCORE:[/]     [bold green]{fs}/100[/]")
+        header_lines.append(f"[bold cyan]{avatar_lines[8]}[/]     [bold cyan]PEAK TIME:[/]       [dim]{peak_velocity}[/]")
+        header_lines.append(f"[bold cyan]{avatar_lines[9]}[/]     [bold cyan]PROJECTS:[/]        [dim]{active_projects_count}[/]")
+        header_lines.append(f"[bold cyan]{avatar_lines[10]}[/]     [bold cyan]COMMITS:[/]         [dim]{total_commits}[/]")
+        header_lines.append(f"[bold cyan]{avatar_lines[11]}[/]     [bold cyan]SYSTEM ENGINE:[/]   [dim]Online & Synchronized[/]")
+        header_lines.append(f"[bold cyan]{avatar_lines[12]}[/]     [bold cyan]====================================================[/]")
+        header_lines.append(f"[bold cyan]{avatar_lines[13]}[/]")
+        
+        self.mount(Static("\n".join(header_lines) + "\n\n"))
         
         # 2. Time Distribution Bar
-        elements.append(Text.from_markup("[bold]Time Distribution[/bold]\n"))
+        elements = [Text.from_markup("[bold]Time Distribution[/bold]\n")]
         display_names = disambiguate_project_names(projects)
         project_seconds = defaultdict(int)
         for s in sessions:
@@ -846,7 +871,7 @@ class DetailsCanvas(VerticalScroll):
         
         operator = get_operator_handle()
         day_dt = datetime.strptime(date_str, "%Y-%m-%d")
-        formatted_date = day_dt.strftime("%B %d, %Y")
+        formatted_date = day_dt.strftime("%A, %B %d, %Y")
         
         fs = int(calculate_focus_score(sessions) * 10)
         tod = calculate_time_of_day_distribution(sessions)
@@ -861,16 +886,35 @@ class DetailsCanvas(VerticalScroll):
         ai_enabled = self.app.config.get("ai_enabled", False)
         provider = self.app.config.get("active_provider", "disabled")
         
-        # Build the header block
-        header_lines = []
-        header_lines.append("[bold cyan]====================================================================[/]")
-        header_lines.append("[bold cyan]📖 termstory // THE DAILY CHRONICLE[/]")
-        header_lines.append("[bold cyan]====================================================================[/]")
-        
+        # Calculate focus duration
+        total_time_seconds = sum(s.duration_seconds for s in sessions)
+        focus_str = format_duration(total_time_seconds)
         status_part = "Narrative Concluded" if (ai_enabled and provider != "disabled") else "Offline / Local Only"
-        header_lines.append(f"OPERATOR: [bold cyan]{operator:<20}[/]  │  DATE: [bold]{formatted_date}[/]")
-        header_lines.append(f"STATUS: {status_part:<22}  │  FOCUS SCORE: [bold green]{fs}/100[/]")
-        header_lines.append("[bold cyan]====================================================================[/]")
+        
+        # Fetch GitHub avatar ASCII lines (28x14)
+        avatar_lines = get_github_avatar_ascii(
+            operator, 
+            width=28, 
+            height=14, 
+            on_resolved=lambda: self.app.call_from_thread(self.refresh_details_canvas)
+        )
+        
+        # Build the side-by-side header block
+        header_lines = []
+        header_lines.append(f"[bold cyan]{avatar_lines[0]}[/]     [bold cyan]📖 termstory // THE DAILY CHRONICLE[/]")
+        header_lines.append(f"[bold cyan]{avatar_lines[1]}[/]     [bold cyan]====================================================[/]")
+        header_lines.append(f"[bold cyan]{avatar_lines[2]}[/]     [bold cyan]OPERATOR:[/]        [bold cyan]@{operator.lstrip('@')}[/]")
+        header_lines.append(f"[bold cyan]{avatar_lines[3]}[/]     [bold cyan]DATE:[/]            [bold]{formatted_date}[/]")
+        header_lines.append(f"[bold cyan]{avatar_lines[4]}[/]     [bold cyan]STATUS:[/]          [dim]{status_part}[/]")
+        header_lines.append(f"[bold cyan]{avatar_lines[5]}[/]     [bold cyan]FOCUS TIME:[/]      [bold]{focus_str}[/]")
+        header_lines.append(f"[bold cyan]{avatar_lines[6]}[/]     [bold cyan]ACTIVE SESSIONS:[/] [bold]{len(sessions)}[/]")
+        header_lines.append(f"[bold cyan]{avatar_lines[7]}[/]     [bold cyan]FOCUS SCORE:[/]     [bold green]{fs}/100[/]")
+        header_lines.append(f"[bold cyan]{avatar_lines[8]}[/]     [bold cyan]PEAK TIME:[/]       [dim]{peak_velocity}[/]")
+        header_lines.append(f"[bold cyan]{avatar_lines[9]}[/]     [bold cyan]PROJECTS:[/]        [dim]{len(projects)}[/]")
+        header_lines.append(f"[bold cyan]{avatar_lines[10]}[/]     [bold cyan]COMMITS:[/]         [dim]{sum(len(s.commits) for s in sessions)}[/]")
+        header_lines.append(f"[bold cyan]{avatar_lines[11]}[/]     [bold cyan]SYSTEM ENGINE:[/]   [dim]Online & Synchronized[/]")
+        header_lines.append(f"[bold cyan]{avatar_lines[12]}[/]     [bold cyan]====================================================[/]")
+        header_lines.append(f"[bold cyan]{avatar_lines[13]}[/]")
         
         self.mount(Static("\n".join(header_lines)))
         
@@ -889,7 +933,7 @@ class DetailsCanvas(VerticalScroll):
         narrative_widgets = []
         
         if ai_enabled and provider != "disabled":
-            narrative_widgets.append(Static("[bold gold]━━━ AI Timeframe Summary ━━━[/bold gold]\n"))
+            narrative_widgets.append(Static("[bold gold]━━━ AI Daily Chronicle ━━━[/bold gold]\n"))
             if date_str in getattr(self.app, "generating_reviews", set()):
                 narrative_widgets.append(Static("⏳ [italic yellow]Generating Daily Chronicle... please wait[/italic yellow]\n"))
             else:
@@ -1243,7 +1287,7 @@ class TermStoryWorkspace(App):
         width: 5;
         height: auto;
     }
-    .exec-container, .bulk-container, .session-ai-container, .feed-container {
+    .exec-container, .bulk-container, .session-ai-container, .feed-container, .chronicle-container {
         margin: 1 0;
         height: auto;
     }
@@ -1370,6 +1414,12 @@ class TermStoryWorkspace(App):
         if result:
             self.config = result
             save_config(self.config)
+            
+            # Start background conversion/fetch for onboarding github handle immediately
+            guser = self.config.get("github_username")
+            if guser:
+                get_github_avatar_ascii(guser)
+                
             self.update_stats_header()
             self.refresh_details_canvas()
         self.query_one("#history-navigator").focus()
@@ -1757,10 +1807,10 @@ class TermStoryWorkspace(App):
                 canvas.render_time_summary("📊 Overall Dashboard Summary", self.sessions, self.projects, timeframe_id="overall", timeframe_type="overall")
             elif category == "projects":
                 canvas.remove_children()
-                canvas.mount(Static("\n\n[bold yellow]🚧 Under Construction: Projects View[/bold yellow]\n[dim]This section will provide a dedicated view for project tracking.[/dim]", id="under-construction"))
+                canvas.mount(Static("\n\n[bold yellow]🚧 Under Construction: Projects View[/bold yellow]\n[dim]This section will provide a dedicated view for project tracking.[/dim]"))
             elif category == "insights":
                 canvas.remove_children()
-                canvas.mount(Static("\n\n[bold yellow]🚧 Under Construction: Insights View[/bold yellow]\n[dim]This section will provide high-level work analytics and focus scoring.[/dim]", id="under-construction"))
+                canvas.mount(Static("\n\n[bold yellow]🚧 Under Construction: Insights View[/bold yellow]\n[dim]This section will provide high-level work analytics and focus scoring.[/dim]"))
                 
         elif node_type == "month":
             year = node_data["year"]

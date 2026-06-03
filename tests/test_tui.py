@@ -281,7 +281,7 @@ async def test_tui_onboarding_mouse_click():
         db.init_db()
 
         app = TermStoryWorkspace(db, days_limit=30, config_override={"has_seen_onboarding": False})
-        async with app.run_test(size=(120, 40)) as pilot:
+        async with app.run_test(size=(120, 50)) as pilot:
             # Click the disable button on OnboardingScreen
             await pilot.click("#btn-disable-ai")
             assert app.config["has_seen_onboarding"] is True

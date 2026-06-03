@@ -972,6 +972,15 @@ def generate_daily_activity_punch_card(sessions: List[Session]) -> str:
 
 
 def get_operator_handle() -> str:
+    try:
+        from termstory.config import load_config
+        cfg = load_config()
+        stored_user = cfg.get("github_username")
+        if stored_user:
+            return f"@{stored_user.strip().lstrip('@')}"
+    except Exception:
+        pass
+
     import subprocess
     try:
         res = subprocess.run(["git", "config", "github.user"], capture_output=True, text=True, check=False)
@@ -1001,5 +1010,303 @@ def get_operator_handle() -> str:
         return f"@{os.getlogin()}"
     except Exception:
         return "@developer"
+
+
+def boxify_terminal_wrapped(text: str) -> str:
+    """Format and boxify executive summary cards into a clean terminal outline."""
+    raw_lines = text.split("\n")
+    cleaned_lines = []
+    
+    for line in raw_lines:
+        l = line.strip()
+        # Remove markdown stars
+        l = l.replace("*", "")
+        # Strip vertical borders
+        if l.startswith("│"):
+            l = l[1:]
+        if l.endswith("│"):
+            l = l[:-1]
+        l = l.strip()
+        # Ignore horizontal line boundary characters
+        if any(c in l for c in ["┌", "└", "├", "─", "━", "═"]):
+            continue
+        # Clean up trailing / leading pipes
+        if l.startswith("|"):
+            l = l[1:]
+        if l.endswith("|"):
+            l = l[:-1]
+        cleaned_lines.append(l.strip())
+        
+    # Remove leading/trailing empty lines
+    while cleaned_lines and not cleaned_lines[0]:
+        cleaned_lines.pop(0)
+    while cleaned_lines and not cleaned_lines[-1]:
+        cleaned_lines.pop()
+        
+    if not cleaned_lines:
+        return text
+
+    is_rpg = any("CHARACTER SHEET" in line.upper() or "TELEMETRY" in line.upper() or "[⚔️" in line or "[🎒" in line for line in cleaned_lines)
+    width = 58
+    
+    def display_len(s: str) -> int:
+        length = 0
+        for char in s:
+            if ord(char) > 0x2000:
+                length += 2
+            else:
+                length += 1
+        return length
+
+    box_lines = []
+    
+    if is_rpg:
+        box_lines.append("┌" + "─" * (width + 2) + "┐")
+        for line in cleaned_lines:
+            if line.startswith("===") or line.startswith("---"):
+                box_lines.append("├" + "─" * (width + 2) + "┤")
+                continue
+            disp = display_len(line)
+            if disp > width:
+                words = line.split(" ")
+                current = ""
+                for w in words:
+                    test = current + " " + w if current else w
+                    if display_len(test) <= width:
+                        current = test
+                    else:
+                        box_lines.append(f"│ {current}{' ' * (width - display_len(current))} │")
+                        current = w
+                if current:
+                    box_lines.append(f"│ {current}{' ' * (width - display_len(current))} │")
+            else:
+                box_lines.append(f"│ {line}{' ' * (width - disp)} │")
+        box_lines.append("└" + "─" * (width + 2) + "┘")
+        return "\n".join(box_lines)
+        
+    # Standard Spotify-Wrapped box
+    box_lines.append("┌" + "─" * (width + 2) + "┐")
+    
+    # First line is the title
+    title_line = cleaned_lines[0]
+    disp = display_len(title_line)
+    box_lines.append(f"│ {title_line}{' ' * max(0, width - disp)} │")
+    box_lines.append("├" + "─" * (width + 2) + "┤")
+    
+    for line in cleaned_lines[1:]:
+        if not line:
+            box_lines.append(f"│ {' ' * width} │")
+            continue
+            
+        disp = display_len(line)
+        if disp > width:
+            words = line.split(" ")
+            current = ""
+            for w in words:
+                test = current + " " + w if current else w
+                if display_len(test) <= width:
+                    current = test
+                else:
+                    box_lines.append(f"│ {current}{' ' * max(0, width - display_len(current))} │")
+                    current = w
+            if current:
+                box_lines.append(f"│ {current}{' ' * max(0, width - display_len(current))} │")
+        else:
+            box_lines.append(f"│ {line}{' ' * (width - disp)} │")
+            
+    box_lines.append("└" + "─" * (width + 2) + "┘")
+    return "\n".join(box_lines)
+
+
+_avatar_cache = {}
+_avatar_fetching = set()
+
+FALLBACK_AVATAR = [
+    " ▄▄▄████▄▄▄ ",
+    " ███▀  ▀███ ",
+    " █▀      ▀█ ",
+    " █ ▄▄  ▄▄ █ ",
+    " █ ▀▀  ▀▀ █ ",
+    " ██▄    ▄██ ",
+    "  ▀██████▀  "
+]
+
+def get_fallback_avatar_padded(width: int, height: int) -> List[str]:
+    """Pad and center the 12x7 fallback avatar within the requested width and height dimensions."""
+    fallback_width = len(FALLBACK_AVATAR[0])
+    fallback_height = len(FALLBACK_AVATAR)
+    
+    pad_top = max(0, (height - fallback_height) // 2)
+    pad_bottom = max(0, height - fallback_height - pad_top)
+    pad_left = max(0, (width - fallback_width) // 2)
+    pad_right = max(0, width - fallback_width - pad_left)
+    
+    lines = []
+    # Top padding
+    for _ in range(pad_top):
+        lines.append(" " * width)
+    # Content
+    for f_line in FALLBACK_AVATAR:
+        lines.append(" " * pad_left + f_line + " " * pad_right)
+    # Bottom padding
+    for _ in range(pad_bottom):
+        lines.append(" " * width)
+        
+    # Double check height is exactly correct (trim or pad if rounding issues)
+    while len(lines) < height:
+        lines.append(" " * width)
+    if len(lines) > height:
+        lines = lines[:height]
+        
+    return [line[:width] for line in lines]
+
+def get_github_avatar_ascii(username: str, width: int = 12, height: int = 7, on_resolved=None) -> List[str]:
+    """
+    Get the GitHub avatar as ASCII art lines.
+    If the avatar is not in cache, tries to load it from a local file-based cache.
+    If not on disk, fetches it in a background thread and returns the fallback avatar.
+    Once fetched, saves to disk and calls on_resolved callback to trigger UI refresh.
+    """
+    clean_username = username.strip().lstrip('@')
+    if not clean_username or clean_username.lower() in ("developer", "other", "general"):
+        return get_fallback_avatar_padded(width, height)
+        
+    cache_key = f"{clean_username}_{width}_{height}"
+    if cache_key in _avatar_cache:
+        return _avatar_cache[cache_key]
+        
+    # Check disk cache
+    import os
+    db_dir = os.path.expanduser("~/.termstory")
+    disk_path = os.path.join(db_dir, f"avatar_braille_{clean_username}_{width}_{height}.txt")
+    if os.path.exists(disk_path):
+        try:
+            with open(disk_path, "r", encoding="utf-8") as f:
+                lines = [line.rstrip('\r\n') for line in f.readlines()]
+            if len(lines) == height:
+                _avatar_cache[cache_key] = lines
+                return lines
+        except Exception:
+            pass
+            
+    if cache_key in _avatar_fetching:
+        return get_fallback_avatar_padded(width, height)
+        
+    # Start background fetch
+    import threading
+    _avatar_fetching.add(cache_key)
+    
+    def fetch_thread():
+        try:
+            import urllib.request
+            import io
+            from PIL import Image, ImageEnhance, ImageOps
+            
+            url = f"https://github.com/{clean_username}.png"
+            req = urllib.request.Request(
+                url, 
+                headers={"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"}
+            )
+            with urllib.request.urlopen(req, timeout=5.0) as response:
+                img_data = response.read()
+                
+            img = Image.open(io.BytesIO(img_data))
+            
+            # Handle alpha channel
+            if img.mode in ("RGBA", "LA") or (img.mode == "P" and "transparency" in img.info):
+                bg = Image.new("RGBA", img.size, (255, 255, 255))
+                img_rgba = img.convert("RGBA")
+                bg.paste(img_rgba, mask=img_rgba.split()[3])
+                img = bg.convert("L")
+            else:
+                img = img.convert("L")
+                
+            # Check if background is light (corner pixels average)
+            w, h = img.size
+            corners = [
+                img.getpixel((0, 0)),
+                img.getpixel((w - 1, 0)),
+                img.getpixel((0, h - 1)),
+                img.getpixel((w - 1, h - 1))
+            ]
+            avg_corner = sum(corners) / len(corners)
+            should_invert = (avg_corner > 127)
+            
+            # Equalize histogram to balance contrast and details
+            img = ImageOps.equalize(img)
+            
+            # Boost contrast slightly to sharpen lines
+            enhancer = ImageEnhance.Contrast(img)
+            img = enhancer.enhance(1.2)
+            
+            # Resize to (width * 2) x (height * 4) for Braille dots
+            img = img.resize((width * 2, height * 4), Image.Resampling.BILINEAR)
+            
+            # Map pixels to binary grid
+            pixels = []
+            for y in range(height * 4):
+                row = []
+                for x in range(width * 2):
+                    val = img.getpixel((x, y))
+                    if should_invert:
+                        val = 255 - val
+                    row.append(1 if val >= 127 else 0)
+                pixels.append(row)
+                
+            # Construct characters using Braille dots:
+            # 1 4
+            # 2 5
+            # 3 6
+            # 7 8
+            dot_weights = [
+                ((0, 0), 0x01),
+                ((0, 1), 0x02),
+                ((0, 2), 0x04),
+                ((1, 0), 0x08),
+                ((1, 1), 0x10),
+                ((1, 2), 0x20),
+                ((0, 3), 0x40),
+                ((1, 3), 0x80)
+            ]
+            
+            lines = []
+            for y in range(height):
+                line_chars = []
+                for x in range(width):
+                    code = 0
+                    for (dx, dy), weight in dot_weights:
+                        px = 2 * x + dx
+                        py = 4 * y + dy
+                        if pixels[py][px] == 1:
+                            code |= weight
+                    if code == 0:
+                        line_chars.append(" ")
+                    else:
+                        line_chars.append(chr(0x2800 + code))
+                lines.append("".join(line_chars))
+                
+            _avatar_cache[cache_key] = lines
+            
+            # Save to disk cache
+            try:
+                os.makedirs(db_dir, exist_ok=True)
+                with open(disk_path, "w", encoding="utf-8") as f:
+                    f.write("\n".join(lines))
+            except Exception:
+                pass
+        except Exception:
+            # On failure, cache fallback
+            _avatar_cache[cache_key] = get_fallback_avatar_padded(width, height)
+        finally:
+            _avatar_fetching.discard(cache_key)
+            if on_resolved:
+                try:
+                    on_resolved()
+                except Exception:
+                    pass
+                    
+    threading.Thread(target=fetch_thread, daemon=True).start()
+    return get_fallback_avatar_padded(width, height)
+
 
 
