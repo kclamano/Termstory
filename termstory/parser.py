@@ -215,9 +215,10 @@ def parse_all_histories(filepaths: List[str]) -> List[Command]:
     """Parse all listed history files, merge and deduplicate them, and sort by timestamp"""
     all_commands = []
     for path in filepaths:
-        if "zsh" in path:
+        filename = os.path.basename(path).lower()
+        if "zsh" in filename:
             all_commands.extend(parse_zsh_history(path))
-        elif "bash" in path:
+        elif "bash" in filename:
             all_commands.extend(parse_bash_history(path))
         else:
             # Fallback to bash parser for unknown file types

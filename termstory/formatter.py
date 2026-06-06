@@ -351,7 +351,7 @@ def format_month_output(sessions: List[Session], projects: List[Project], year: 
         day_word = "day" if days_worked == 1 else "days"
         
         sorted_dates = sorted(list(proj_logged_dates))
-        days_str = ", ".join(d.strftime("%b %-d") for d in sorted_dates)
+        days_str = ", ".join(f"{d.strftime('%b')} {d.day}" for d in sorted_dates)
         
         proj_group_items = [
             Text.from_markup(f"📁 [bold cyan]{proj_name}[/]"),
@@ -476,8 +476,10 @@ def format_projects_list(projects: List[Project]) -> str:
     display_names = disambiguate_project_names(projects)
     for idx, p in enumerate(projects, 1):
         name = display_names.get(p.id, p.name)
-        first_str = datetime.fromtimestamp(p.first_seen).strftime("%b %-d, %Y")
-        last_str = datetime.fromtimestamp(p.last_seen).strftime("%b %-d, %Y")
+        first_dt = datetime.fromtimestamp(p.first_seen)
+        last_dt = datetime.fromtimestamp(p.last_seen)
+        first_str = f"{first_dt.strftime('%b')} {first_dt.day}, {first_dt.strftime('%Y')}"
+        last_str = f"{last_dt.strftime('%b')} {last_dt.day}, {last_dt.strftime('%Y')}"
         table.add_row(
             str(idx),
             name,
@@ -592,7 +594,7 @@ def _is_noise_command(cmd: str) -> bool:
         return True
     # Scripting/utility commands (not memorable milestones)
     if lower.startswith(('sed ', 'echo ', 'find ', 'awk ', 'sort ',
-                         'ssh ', 'scp ', 'mkdir ', 'nano ', 'touch ',
+                         'ssh ', 'scp ', 'mkdir ', 'touch ',
                          'rm ', 'mv ', 'cp ', 'chmod ', 'chown ')):
         return True
     return False
@@ -1006,8 +1008,8 @@ def get_operator_handle() -> str:
     except Exception:
         pass
     try:
-        import os
-        return f"@{os.getlogin()}"
+        import getpass
+        return f"@{getpass.getuser()}"
     except Exception:
         return "@developer"
 
@@ -1049,10 +1051,15 @@ def boxify_terminal_wrapped(text: str) -> str:
     is_rpg = any("CHARACTER SHEET" in line.upper() or "TELEMETRY" in line.upper() or "[⚔️" in line or "[🎒" in line for line in cleaned_lines)
     width = 58
     
+    import unicodedata
+    import re
+    ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+    
     def display_len(s: str) -> int:
+        s_clean = ansi_escape.sub('', s)
         length = 0
-        for char in s:
-            if ord(char) > 0x2000:
+        for char in s_clean:
+            if unicodedata.east_asian_width(char) in ('W', 'F'):
                 length += 2
             else:
                 length += 1
@@ -1118,8 +1125,10 @@ def boxify_terminal_wrapped(text: str) -> str:
     return "\n".join(box_lines)
 
 
+import threading
 _avatar_cache = {}
 _avatar_fetching = set()
+_avatar_lock = threading.Lock()
 
 FALLBACK_AVATAR = [
     " ▄▄▄████▄▄▄ ",
@@ -1172,97 +1181,83 @@ def get_github_avatar_ascii(username: str, width: int = 12, height: int = 7, on_
         return get_fallback_avatar_padded(width, height)
         
     cache_key = f"{clean_username}_{width}_{height}"
-    if cache_key in _avatar_cache:
-        return _avatar_cache[cache_key]
+    with _avatar_lock:
+        if cache_key in _avatar_cache:
+            return _avatar_cache[cache_key]
         
     # Check disk cache
     import os
-    db_dir = os.path.expanduser("~/.termstory")
+    from termstory.config import get_app_dir
+    db_dir = get_app_dir("data")
     disk_path = os.path.join(db_dir, f"avatar_braille_{clean_username}_{width}_{height}.txt")
     if os.path.exists(disk_path):
         try:
             with open(disk_path, "r", encoding="utf-8") as f:
                 lines = [line.rstrip('\r\n') for line in f.readlines()]
             if len(lines) == height:
-                _avatar_cache[cache_key] = lines
+                with _avatar_lock:
+                    _avatar_cache[cache_key] = lines
                 return lines
         except Exception:
             pass
             
-    if cache_key in _avatar_fetching:
-        return get_fallback_avatar_padded(width, height)
+    with _avatar_lock:
+        if cache_key in _avatar_fetching:
+            return get_fallback_avatar_padded(width, height)
+        _avatar_fetching.add(cache_key)
         
     # Start background fetch
-    import threading
-    _avatar_fetching.add(cache_key)
-    
     def fetch_thread():
         try:
+            from PIL import Image, ImageOps
             import urllib.request
             import io
-            from PIL import Image, ImageEnhance, ImageOps
             
-            url = f"https://github.com/{clean_username}.png"
+            # Fetch the avatar image
+            avatar_url = f"https://github.com/{clean_username}.png"
             req = urllib.request.Request(
-                url, 
-                headers={"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"}
+                avatar_url,
+                headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
             )
-            with urllib.request.urlopen(req, timeout=5.0) as response:
+            
+            with urllib.request.urlopen(req, timeout=10.0) as response:
                 img_data = response.read()
                 
-            img = Image.open(io.BytesIO(img_data))
+            img = Image.open(io.BytesIO(img_data)).convert("RGBA")
             
-            # Handle alpha channel
-            if img.mode in ("RGBA", "LA") or (img.mode == "P" and "transparency" in img.info):
-                bg = Image.new("RGBA", img.size, (255, 255, 255))
-                img_rgba = img.convert("RGBA")
-                bg.paste(img_rgba, mask=img_rgba.split()[3])
-                img = bg.convert("L")
-            else:
-                img = img.convert("L")
-                
-            # Check if background is light (corner pixels average)
-            w, h = img.size
-            corners = [
-                img.getpixel((0, 0)),
-                img.getpixel((w - 1, 0)),
-                img.getpixel((0, h - 1)),
-                img.getpixel((w - 1, h - 1))
-            ]
-            avg_corner = sum(corners) / len(corners)
-            should_invert = (avg_corner > 127)
+            # Resize image to match requested text cells
+            target_px_width = width * 2
+            target_px_height = height * 4
+            img = img.resize((target_px_width, target_px_height), Image.Resampling.BILINEAR)
             
-            # Count unique colors in a 16x16 NEAREST resampled image to bypass antialiasing
-            img_small = img.resize((16, 16), Image.Resampling.NEAREST)
-            unique_colors = len(set(img_small.getdata()))
+            # Process grayscale
+            r, g, b, a = img.split()
+            black_bg = Image.new("RGB", img.size, (0, 0, 0))
+            black_bg.paste(img, mask=a)
+            gray_img = ImageOps.grayscale(black_bg)
+            gray_img = ImageOps.equalize(gray_img)
             
-            # Equalize histogram to balance contrast and details
-            img = ImageOps.equalize(img)
+            # Analyze complexity
+            pixels_list = list(gray_img.getdata())
+            mean_val = sum(pixels_list) / len(pixels_list)
+            variance = sum((x - mean_val) ** 2 for x in pixels_list) / len(pixels_list)
+            is_flat_graphic = variance < 3000
             
-            # Boost contrast slightly to sharpen lines
-            enhancer = ImageEnhance.Contrast(img)
-            img = enhancer.enhance(1.2)
-            
-            # Resize to (width * 2) x (height * 4) for Braille dots
-            img = img.resize((width * 2, height * 4), Image.Resampling.BILINEAR)
-            
-            # Determine method based on complexity (threshold <= 24, dither > 24)
-            use_dither = (unique_colors > 24)
-            
-            # Map pixels to binary grid
             pixels = []
-            if not use_dither:
-                # Flat graphics / identicons: Static thresholding at 127
+            if is_flat_graphic:
                 for y in range(height * 4):
                     row = []
                     for x in range(width * 2):
-                        val = img.getpixel((x, y))
-                        if should_invert:
-                            val = 255 - val
-                        row.append(1 if val >= 127 else 0)
+                        val = gray_img.getpixel((x, y))
+                        row.append(1 if val >= 128 else 0)
                     pixels.append(row)
             else:
-                # Photos / complex gradients: 8x8 Bayer ordered dithering
+                border_pixels = [gray_img.getpixel((x, 0)) for x in range(target_px_width)] + \
+                                [gray_img.getpixel((x, target_px_height - 1)) for x in range(target_px_width)] + \
+                                [gray_img.getpixel((0, y)) for y in range(target_px_height)] + \
+                                [gray_img.getpixel((target_px_width - 1, y)) for y in range(target_px_height)]
+                should_invert = (sum(border_pixels) / len(border_pixels)) > 128
+                
                 bayer_matrix_8x8 = [
                     [ 0, 48, 12, 60,  3, 51, 15, 63],
                     [32, 16, 44, 28, 35, 19, 47, 31],
@@ -1276,28 +1271,16 @@ def get_github_avatar_ascii(username: str, width: int = 12, height: int = 7, on_
                 for y in range(height * 4):
                     row = []
                     for x in range(width * 2):
-                        val = img.getpixel((x, y))
+                        val = gray_img.getpixel((x, y))
                         if should_invert:
                             val = 255 - val
-                        # Scale 0-63 to 0-255 using (val + 0.5) * 4
                         threshold = int((bayer_matrix_8x8[y % 8][x % 8] + 0.5) * 4)
                         row.append(1 if val >= threshold else 0)
                     pixels.append(row)
                 
-            # Construct characters using Braille dots:
-            # 1 4
-            # 2 5
-            # 3 6
-            # 7 8
             dot_weights = [
-                ((0, 0), 0x01),
-                ((0, 1), 0x02),
-                ((0, 2), 0x04),
-                ((1, 0), 0x08),
-                ((1, 1), 0x10),
-                ((1, 2), 0x20),
-                ((0, 3), 0x40),
-                ((1, 3), 0x80)
+                ((0, 0), 0x01), ((0, 1), 0x02), ((0, 2), 0x04), ((1, 0), 0x08),
+                ((1, 1), 0x10), ((1, 2), 0x20), ((0, 3), 0x40), ((1, 3), 0x80)
             ]
             
             lines = []
@@ -1310,15 +1293,12 @@ def get_github_avatar_ascii(username: str, width: int = 12, height: int = 7, on_
                         py = 4 * y + dy
                         if pixels[py][px] == 1:
                             code |= weight
-                    if code == 0:
-                        line_chars.append(" ")
-                    else:
-                        line_chars.append(chr(0x2800 + code))
+                    line_chars.append(" " if code == 0 else chr(0x2800 + code))
                 lines.append("".join(line_chars))
                 
-            _avatar_cache[cache_key] = lines
+            with _avatar_lock:
+                _avatar_cache[cache_key] = lines
             
-            # Save to disk cache
             try:
                 os.makedirs(db_dir, exist_ok=True)
                 with open(disk_path, "w", encoding="utf-8") as f:
@@ -1326,10 +1306,11 @@ def get_github_avatar_ascii(username: str, width: int = 12, height: int = 7, on_
             except Exception:
                 pass
         except Exception:
-            # On failure, cache fallback
-            _avatar_cache[cache_key] = get_fallback_avatar_padded(width, height)
+            with _avatar_lock:
+                _avatar_cache[cache_key] = get_fallback_avatar_padded(width, height)
         finally:
-            _avatar_fetching.discard(cache_key)
+            with _avatar_lock:
+                _avatar_fetching.discard(cache_key)
             if on_resolved:
                 try:
                     on_resolved()

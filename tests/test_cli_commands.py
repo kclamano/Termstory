@@ -85,4 +85,35 @@ def test_cli_config_commands(tmp_path, monkeypatch):
     assert "sk-pro...-123" in result.stdout
     assert "ai_enabled" in result.stdout
 
+def test_cli_reset_commands(monkeypatch):
+    called = []
+    def mock_perform_reset():
+        called.append(True)
+        
+    monkeypatch.setattr("termstory.cli.perform_reset", mock_perform_reset)
+    
+    runner = CliRunner()
+    
+    # Test --reset option
+    result = runner.invoke(app, ["--reset"])
+    assert result.exit_code == 0
+    assert len(called) == 1
+    
+    called.clear()
+    # Test reset subcommand
+    result_sub = runner.invoke(app, ["reset"])
+    assert result_sub.exit_code == 0
+    assert len(called) == 1
+    
+    # Test -reset arg rewritten to --reset via intercept_sys_argv
+    import sys
+    sys_argv_orig = sys.argv
+    try:
+        sys.argv = ["termstory", "-reset"]
+        from termstory.cli import intercept_sys_argv
+        intercept_sys_argv()
+        assert sys.argv[1] == "--reset"
+    finally:
+        sys.argv = sys_argv_orig
+
 

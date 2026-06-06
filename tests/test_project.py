@@ -64,9 +64,9 @@ def test_detect_projects():
     assert proj_b.path == "/Users/username/my-awesome-project"
     assert s2.project_id == proj_b.id
     
-    # Session 3 should remain unaffiliated
-    assert s3.project_id is None
-    assert cmd5.project_id is None
+    # Session 3 inherits Project B because the simulated cwd persists
+    assert s3.project_id == proj_b.id
+    assert cmd5.project_id == proj_b.id
 
 def test_find_project_root(tmp_path, monkeypatch):
     monkeypatch.setattr("os.path.expanduser", lambda path: str(tmp_path) if path == "~" else path)

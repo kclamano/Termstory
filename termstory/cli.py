@@ -25,6 +25,11 @@ def intercept_sys_argv():
     """Intercept positional date arguments (e.g. termstory 2026-06-02) and rewrite them
     to option flags so they do not conflict with subcommands in click/typer"""
     if len(sys.argv) > 1:
+        # Intercept -reset and rewrite it to --reset
+        for i in range(1, len(sys.argv)):
+            if sys.argv[i] == "-reset":
+                sys.argv[i] = "--reset"
+
         date_pattern = re.compile(r'^\d{4}-\d{2}-\d{2}$')
         first_arg = sys.argv[1]
         if date_pattern.match(first_arg):
@@ -34,8 +39,7 @@ def intercept_sys_argv():
             else:
                 sys.argv.pop(1)
 
-# Execute immediately to intercept arguments before click/typer processes them
-intercept_sys_argv()
+# Will be executed via main_entry() to intercept arguments before click/typer processes them
 
 app = typer.Typer(
     help="TermStory CLI - Parse local shell history and explore your work patterns",
@@ -93,6 +97,24 @@ def search_history(
     output = format_search_results(query, results, detailed=detailed)
     console.print(output)
 
+def perform_reset():
+    """Reset all TermStory state, configuration, and database files on disk"""
+    import shutil
+    from termstory.config import get_app_dir
+    dirs_to_clean = {get_app_dir("config"), get_app_dir("data")}
+    for db_dir in dirs_to_clean:
+        if os.path.exists(db_dir):
+            try:
+                for filename in os.listdir(db_dir):
+                    file_path = os.path.join(db_dir, filename)
+                    if os.path.isfile(file_path) or os.path.islink(file_path):
+                        os.unlink(file_path)
+                    elif os.path.isdir(file_path):
+                        shutil.rmtree(file_path)
+            except Exception:
+                pass
+    console.print("\n[bold green]✨ TermStory state, configuration, and database have been successfully reset![/]")
+
 @app.command("ui")
 def show_ui(
     days: int = typer.Option(90, "--days", help="Number of days of history to display"),
@@ -110,19 +132,14 @@ def show_ui(
     app_tui.run()
     
     if getattr(app_tui, "was_reset", False):
-        import shutil
-        db_dir = os.path.expanduser("~/.termstory")
-        if os.path.exists(db_dir):
-            try:
-                for filename in os.listdir(db_dir):
-                    file_path = os.path.join(db_dir, filename)
-                    if os.path.isfile(file_path) or os.path.islink(file_path):
-                        os.unlink(file_path)
-                    elif os.path.isdir(file_path):
-                        shutil.rmtree(file_path)
-            except Exception:
-                pass
-        console.print("\n[bold green]✨ TermStory state, configuration, and database have been successfully reset![/]")
+        perform_reset()
+
+@app.command("reset")
+def reset_cmd():
+    """Reset all TermStory state, configuration, and database"""
+    perform_reset()
+
+
 
 
 # ==========================================
@@ -200,8 +217,13 @@ app.add_typer(config_app, name="config")
 def main(
     ctx: typer.Context,
     date: Optional[str] = typer.Option(None, "--date", help="Date override (YYYY-MM-DD) for commands"),
+    reset: bool = typer.Option(False, "--reset", help="Reset all TermStory state, configuration, and database"),
 ):
     """TermStory - local shell history parsing and session summaries"""
+    if reset:
+        perform_reset()
+        raise typer.Exit()
+
     if date:
         try:
             date_parser.parse(date)
@@ -214,5 +236,12 @@ def main(
         # No subcommand, fallback to today's report
         show_ui()
 
-if __name__ == "__main__":
+def main_entry():
+    intercept_sys_argv()
     app()
+
+def cli():
+    main_entry()
+
+if __name__ == "__main__":
+    main_entry()

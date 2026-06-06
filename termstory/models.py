@@ -44,6 +44,10 @@ class Session:
     commands: List[Command] = field(default_factory=list) # Commands in this session
     commits: List[Dict] = field(default_factory=list)     # Commits in this session
     ai_summary: Optional[str] = None
+    is_generating_story: bool = False
+    recent_generation: Optional[str] = None
+    _cached_date_str: Optional[str] = None
+    _cached_start_time_formatted: Optional[str] = None
 
     
     @property

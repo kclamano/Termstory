@@ -18,8 +18,9 @@ from termstory.tui import (
     OnboardingScreen,
 )
 
-def test_calculate_streak():
+def test_calculate_streak(monkeypatch):
     now = datetime(2026, 6, 2, 12, 0)
+    monkeypatch.setattr("termstory.tui.get_current_time", lambda: now)
     now_ts = int(now.timestamp())
     
     # 1. Empty sessions
@@ -36,9 +37,7 @@ def test_calculate_streak():
     # 4. Continuous streak (today, yesterday, day before)
     s_yesterday = Session(id=3, start_time=now_ts - 86400, end_time=now_ts - 86400 + 600, duration_seconds=600, project_id=1)
     s_prev = Session(id=4, start_time=now_ts - 2 * 86400, end_time=now_ts - 2 * 86400 + 600, duration_seconds=600, project_id=1)
-    # Mock get_current_time to return Jun 2, 2026
-    # (Since calculate_streak uses get_current_time(), we can mock/patch it if needed, or rely on local system time.
-    # In our tests, we use relative dates to ensure stability.)
+    assert calculate_streak([s1, s_yesterday, s_prev]) == 3
 
 def test_generate_heatmap():
     now = int(datetime.now().timestamp())
@@ -58,12 +57,22 @@ def test_get_session_memory_str():
     ])
     assert get_session_memory_str(s1) == "Clean message"
     
-    # 2. Non-noise command
+    # 2. Command length fallback
     s2 = Session(id=2, start_time=1000, end_time=1600, duration_seconds=600, project_id=1, commands=[
-        Command(timestamp=1000, command="git commit -m 'test'"),
-        Command(timestamp=1001, command="ls") # noise
+        Command(timestamp=1000, command="git status"),
+        Command(timestamp=1100, command="test")
     ])
     assert get_session_memory_str(s2) == "test"
+
+    # 3. AI summary parsing fallback for Option B
+    s3 = Session(id=3, start_time=1000, end_time=1600, duration_seconds=600, project_id=1)
+    s3.ai_summary = "[🤖 Codebase Pulse]\n• Hacked: Wired: Memory-first timeline\n• Tooling: git status\n• Outcome: success"
+    assert get_session_memory_str(s3) == "Wired: Memory-first timeline"
+
+    # 4. AI summary parsing fallback for Option A
+    s4 = Session(id=4, start_time=1000, end_time=1600, duration_seconds=600, project_id=1)
+    s4.ai_summary = "[💻 Dev Log]\n├─ 🔨 Built: Wired up Zsh extended format\n├─ 🔧 Flow: pytest\n└─ 🚀 Result: success"
+    assert get_session_memory_str(s4) == "Wired up Zsh extended format"
 
 def test_tui_workspace_init():
     with tempfile.TemporaryDirectory() as tmp_dir:
@@ -216,9 +225,52 @@ async def test_tui_onboarding_dismiss():
                 },
                 "has_seen_onboarding": True
             })
+            await pilot.pause()
             assert app.config["has_seen_onboarding"] is True
             assert app.config["ai_enabled"] is True
             assert app.config["active_provider"] == "ollama"
+
+
+@pytest.mark.asyncio
+async def test_tui_landing_page_after_onboarding():
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        db_path = os.path.join(tmp_dir, "test.db")
+        db = Database(db_path)
+        db.init_db()
+
+        # Insert a mock project and session for today
+        now = int(datetime.now().timestamp())
+        p = Project(id=1, name="Project Alpha", path="~/alpha", first_seen=now, last_seen=now, session_count=1, total_time=600)
+        cmd = Command(timestamp=now, command="git diff", session_id=1, project_id=1)
+        s = Session(id=1, start_time=now, end_time=now + 600, duration_seconds=600, project_id=1, commands=[cmd])
+        db.save_data([p], [s], [cmd])
+
+        app = TermStoryWorkspace(db, days_limit=30, config_override={"has_seen_onboarding": False})
+        async with app.run_test() as pilot:
+            # Simulate dismissing onboarding screen with save
+            app.handle_onboarding_result({
+                "ai_enabled": True,
+                "active_provider": "ollama",
+                "providers": {
+                    "ollama": {
+                        "api_key": "",
+                        "api_base_url": "http://localhost:11434/v1",
+                        "model_name": "llama3"
+                    }
+                },
+                "has_seen_onboarding": True
+            })
+            await pilot.pause()
+            
+            # Verify today's date node is selected as landing page
+            tree = app.query_one("#history-navigator")
+            cursor_node = tree.cursor_node
+            assert cursor_node is not None
+            assert cursor_node.data is not None
+            assert cursor_node.data.get("type") == "date"
+            
+            today_str = datetime.now().strftime("%Y-%m-%d")
+            assert cursor_node.data.get("date_str") == today_str
 
 
 @pytest.mark.asyncio
@@ -647,6 +699,7 @@ async def test_reset_action():
         async with app.run_test() as pilot:
             assert app.was_reset is False
             await pilot.press("ctrl+shift+h")
+            await pilot.press("y")
             assert app.was_reset is True
 
 
@@ -668,6 +721,7 @@ async def test_tui_month_no_activity_feed():
             days_limit=30, 
             config_override={"has_seen_onboarding": True, "ai_enabled": False}
         )
+        app.auto_select_today_on_mount = False
         
         async with app.run_test() as pilot:
             canvas = app.query_one("#details-canvas")
@@ -714,6 +768,7 @@ async def test_wrapped_view_generation_and_layout(monkeypatch):
                 }
             }
         )
+        app.auto_select_today_on_mount = False
         
         called_args = []
         def mock_generate_wrapped_summary(**kwargs):

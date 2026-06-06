@@ -10,15 +10,28 @@ BLACKLIST_PATTERNS = [
 ]
 
 # Hardcoded redaction patterns
-ENV_EXPORT_PATTERN = re.compile(r'(export\s+[A-Za-z0-9_]+=)(?!\[REDACTED)([^\s\'"]+|\'[^\']*\'|"[^"]*")', re.IGNORECASE)
-HIGH_RISK_ENV_PATTERN = re.compile(r'\b([A-Za-z0-9_]*(?:pass|key|secret|token|auth|cred)[A-Za-z0-9_]*)=(?!\[REDACTED)([^\s\'"]+|\'[^\']*\'|"[^"]*")', re.IGNORECASE)
+ENV_EXPORT_PATTERN = re.compile(
+    r'(export\s+[A-Za-z0-9_]*(?:pass|key|secret|token|auth|cred|pwd|passphrase|url|uri|host|port|user)[A-Za-z0-9_]*=)(?!\[REDACTED)([^\s\'"]+|\'[^\']*\'|"[^"]*")',
+    re.IGNORECASE
+)
+HIGH_RISK_ENV_PATTERN = re.compile(
+    r'\b([A-Za-z0-9_]*(?:pass|key|secret|token|auth|cred|pwd|passphrase|url|uri|host|port|user)[A-Za-z0-9_]*)=(?!\[REDACTED)([^\s\'"]+|\'[^\']*\'|"[^"]*")',
+    re.IGNORECASE
+)
 
 PASSWORD_FLAG_PATTERN = re.compile(
-    r'(--password=|\b--password\s+|\b--pass=|\b--pass\s+|--token=|--token\s+|--api-key=|--api-key\s+|(?<!-)-p\s*)(?!\[REDACTED)([^\s\'"]+|\'[^\']*\'|"[^"]*")',
+    r'(--password=|\b--password\s+|\b--pass=|\b--pass\s+|--token=|--token\s+|--api-key=|--api-key\s+)(?!\[REDACTED)([^\s\'"]+|\'[^\']*\'|"[^"]*")',
     re.IGNORECASE
 )
 
 IP_ADDRESS_PATTERN = re.compile(r'\b(?:\d{1,3}\.){3}\d{1,3}\b')
+IPV6_ADDRESS_PATTERN = re.compile(
+    r'\b(?:[0-9a-fA-F]{1,4}:){2,7}[0-9a-fA-F]{1,4}\b|'
+    r'\b(?:[0-9a-fA-F]{1,4}:){1,6}:[0-9a-fA-F]{1,4}\b|'
+    r'\b[0-9a-fA-F]{1,4}::[0-9a-fA-F]{1,4}\b|'
+    r'\b::[0-9a-fA-F]{1,4}\b|\b[0-9a-fA-F]{1,4}::\b|\b::1\b'
+)
+
 
 # Common programming file extensions to exclude from FQDN redaction
 FILE_EXTENSIONS = {
@@ -62,9 +75,13 @@ def redact_command(cmd: str) -> str:
     
     # 4. Password and Secret flags
     cmd = PASSWORD_FLAG_PATTERN.sub(r'\1[REDACTED]', cmd)
+    if re.search(r'\b(mysql|mysqldump|mongo|influx)\b', cmd, re.IGNORECASE):
+        mysql_password_pattern = re.compile(r'((?<!-)-p\s*)(?!\[REDACTED)([^\s\'"]+|\'[^\']*\'|"[^"]*")', re.IGNORECASE)
+        cmd = mysql_password_pattern.sub(r'\1[REDACTED]', cmd)
     
     # 5. IP Addresses
     cmd = IP_ADDRESS_PATTERN.sub('[REDACTED_IP]', cmd)
+    cmd = IPV6_ADDRESS_PATTERN.sub('[REDACTED_IP]', cmd)
     
     # 6. FQDNs (excluding files)
     def fqdn_replacer(match):

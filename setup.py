@@ -4,11 +4,12 @@ setup(
     name="termstory",
     version="0.2.5",
     author="TermStory Contributors",
-    description="Local shell history parser, session grouper, and daily summary display",
-    long_description=open("README.md").read() if open("README.md") else "",
+    description="Local shell history parsing, session grouping, and visual daily chronicle terminal dashboard",
+    long_description=open("README.md", encoding="utf-8").read(),
     long_description_content_type="text/markdown",
     url="https://github.com/atuinsh/termstory",
-    packages=find_packages(),
+    packages=find_packages(exclude=["tests", "tests.*"]),
+    include_package_data=True,
     install_requires=[
         "typer>=0.9.0",
         "python-dateutil>=2.8.2",
@@ -18,7 +19,7 @@ setup(
     ],
     entry_points={
         "console_scripts": [
-            "termstory=termstory.cli:app",
+            "termstory=termstory.cli:cli",
         ],
     },
     classifiers=[

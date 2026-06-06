@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=61.0.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "termstory"
+version = "0.2.5"
+description = "Local shell history parsing, session grouping, and visual daily chronicle terminal dashboard"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [
+    { name = "TermStory Contributors" }
+]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+dependencies = [
+    "typer>=0.9.0",
+    "python-dateutil>=2.8.2",
+    "rich>=13.0.0",
+    "textual>=0.50.0",
+    "pillow>=10.0.0",
+]
+
+[project.scripts]
+termstory = "termstory.cli:cli"
+
+[tool.setuptools]
+packages = ["termstory"]
+
+[tool.setuptools.package-data]
+termstory = ["templates/*.txt"]

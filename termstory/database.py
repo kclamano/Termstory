@@ -81,11 +81,6 @@ class Database:
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_commits_timestamp ON commits(timestamp DESC);")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_commits_project_id ON commits(project_id);")
         
-        # Prune legacy duplicate sessions that became orphaned (have no commands)
-        cursor.execute("""
-            DELETE FROM sessions 
-            WHERE id NOT IN (SELECT DISTINCT session_id FROM commands WHERE session_id IS NOT NULL);
-        """)
         
         # Add ai_summary column to sessions if not exists
         try:
@@ -256,6 +251,11 @@ class Database:
                     UPDATE commands SET exit_code = ?, session_id = ?, project_id = ? WHERE id = ?
                 """, commands_to_update)
                 
+            # Prune legacy duplicate sessions that became orphaned (have no commands)
+            cursor.execute("""
+                DELETE FROM sessions 
+                WHERE id NOT IN (SELECT DISTINCT session_id FROM commands WHERE session_id IS NOT NULL);
+            """)
             conn.commit()
         except Exception as e:
             conn.rollback()
@@ -269,73 +269,73 @@ class Database:
         start_ts, end_ts = get_today_range()
         
         conn = self.get_connection()
-        cursor = conn.cursor()
-        
-        # 1. Fetch sessions starting today
-        cursor.execute("""
-            SELECT id, start_time, end_time, duration_seconds, project_id, ai_summary
-            FROM sessions
-            WHERE start_time >= ? AND start_time <= ?
-            ORDER BY start_time ASC
-        """, (start_ts, end_ts))
-        session_rows = cursor.fetchall()
-        
-        sessions = []
-        for row in session_rows:
-            s_id, start, end, duration, p_id, ai_sum = row
-
+        try:
+            cursor = conn.cursor()
             
-            # 2. Fetch all commands for this session
+            # 1. Fetch sessions starting today
             cursor.execute("""
-                SELECT id, timestamp, command, exit_code, session_id, project_id
-                FROM commands
-                WHERE session_id = ?
-                ORDER BY timestamp ASC
-            """, (s_id,))
-            cmd_rows = cursor.fetchall()
+                SELECT id, start_time, end_time, duration_seconds, project_id, ai_summary
+                FROM sessions
+                WHERE start_time >= ? AND start_time <= ?
+                ORDER BY start_time ASC
+            """, (start_ts, end_ts))
+            session_rows = cursor.fetchall()
             
-            commands = []
-            for c_row in cmd_rows:
-                c_id, timestamp, command_text, exit_code, _, cmd_p_id = c_row
-                commands.append(Command(
-                    id=c_id,
-                    timestamp=timestamp,
-                    command=command_text,
-                    exit_code=exit_code,
-                    session_id=s_id,
-                    project_id=cmd_p_id
-                ))
+            sessions = []
+            for row in session_rows:
+                s_id, start, end, duration, p_id, ai_sum = row
+    
                 
-            # 3. Fetch all commits for this session (5m pre, 10m post buffers)
-            commits = []
-            if p_id is not None:
+                # 2. Fetch all commands for this session
                 cursor.execute("""
-                    SELECT hash, timestamp, message, cleaned_message
-                    FROM commits
-                    WHERE project_id = ? AND timestamp >= ? AND timestamp <= ?
+                    SELECT id, timestamp, command, exit_code, session_id, project_id
+                    FROM commands
+                    WHERE session_id = ?
                     ORDER BY timestamp ASC
-                """, (p_id, start - 300, end + 600))
-                for c_row in cursor.fetchall():
-                    commits.append({
-                        "hash": c_row[0],
-                        "timestamp": c_row[1],
-                        "message": c_row[2],
-                        "cleaned_message": c_row[3]
-                    })
+                """, (s_id,))
+                cmd_rows = cursor.fetchall()
+                
+                commands = []
+                for c_row in cmd_rows:
+                    c_id, timestamp, command_text, exit_code, _, cmd_p_id = c_row
+                    commands.append(Command(
+                        id=c_id,
+                        timestamp=timestamp,
+                        command=command_text,
+                        exit_code=exit_code,
+                        session_id=s_id,
+                        project_id=cmd_p_id
+                    ))
                     
-            sessions.append(Session(
-                id=s_id,
-                start_time=start,
-                end_time=end,
-                duration_seconds=duration,
-                project_id=p_id,
-                commands=commands,
-                commits=commits,
-                ai_summary=ai_sum
-            ))
-
-            
-        conn.close()
+                # 3. Fetch all commits for this session (5m pre, 10m post buffers)
+                commits = []
+                if p_id is not None:
+                    cursor.execute("""
+                        SELECT hash, timestamp, message, cleaned_message
+                        FROM commits
+                        WHERE project_id = ? AND timestamp >= ? AND timestamp <= ?
+                        ORDER BY timestamp ASC
+                    """, (p_id, start - 300, end + 600))
+                    for c_row in cursor.fetchall():
+                        commits.append({
+                            "hash": c_row[0],
+                            "timestamp": c_row[1],
+                            "message": c_row[2],
+                            "cleaned_message": c_row[3]
+                        })
+                        
+                sessions.append(Session(
+                    id=s_id,
+                    start_time=start,
+                    end_time=end,
+                    duration_seconds=duration,
+                    project_id=p_id,
+                    commands=commands,
+                    commits=commits,
+                    ai_summary=ai_sum
+                ))
+        finally:
+            conn.close()
         return sessions
 
     def get_projects_by_ids(self, project_ids: List[int]) -> List[Project]:
@@ -344,177 +344,179 @@ class Database:
             return []
             
         conn = self.get_connection()
-        cursor = conn.cursor()
-        
-        placeholders = ",".join("?" for _ in project_ids)
-        cursor.execute(f"""
-            SELECT id, name, path, first_seen, last_seen
-            FROM projects
-            WHERE id IN ({placeholders})
-        """, project_ids)
-        
-        rows = cursor.fetchall()
-        projects = []
-        for row in rows:
-            p_id, name, path, first, last = row
-            # Calculate counts dynamically based on all sessions
-            cursor.execute("""
-                SELECT COUNT(*), SUM(duration_seconds)
-                FROM sessions
-                WHERE project_id = ?
-            """, (p_id,))
-            s_count, t_time = cursor.fetchone()
+        try:
+            cursor = conn.cursor()
             
-            projects.append(Project(
-                id=p_id,
-                name=name,
-                path=path,
-                first_seen=first,
-                last_seen=last,
-                session_count=s_count or 0,
-                total_time=t_time or 0
-            ))
+            placeholders = ",".join("?" for _ in project_ids)
+            cursor.execute(f"""
+                SELECT id, name, path, first_seen, last_seen
+                FROM projects
+                WHERE id IN ({placeholders})
+            """, project_ids)
             
-        conn.close()
+            rows = cursor.fetchall()
+            projects = []
+            for row in rows:
+                p_id, name, path, first, last = row
+                # Calculate counts dynamically based on all sessions
+                cursor.execute("""
+                    SELECT COUNT(*), SUM(duration_seconds)
+                    FROM sessions
+                    WHERE project_id = ?
+                """, (p_id,))
+                s_count, t_time = cursor.fetchone()
+                
+                projects.append(Project(
+                    id=p_id,
+                    name=name,
+                    path=path,
+                    first_seen=first,
+                    last_seen=last,
+                    session_count=s_count or 0,
+                    total_time=t_time or 0
+                ))
+        finally:
+            conn.close()
         return projects
 
     def get_range_sessions(self, start_ts: int, end_ts: int) -> List[Session]:
         """Get sessions starting in the given Unix timestamp range"""
         conn = self.get_connection()
-        cursor = conn.cursor()
-        
-        cursor.execute("""
-            SELECT id, start_time, end_time, duration_seconds, project_id, ai_summary
-            FROM sessions
-            WHERE start_time >= ? AND start_time <= ?
-            ORDER BY start_time ASC
-        """, (start_ts, end_ts))
-        session_rows = cursor.fetchall()
-        
-        sessions = []
-        for row in session_rows:
-            s_id, start, end, duration, p_id, ai_sum = row
-
+        try:
+            cursor = conn.cursor()
             
             cursor.execute("""
-                SELECT id, timestamp, command, exit_code, session_id, project_id
-                FROM commands
-                WHERE session_id = ?
-                ORDER BY timestamp ASC
-            """, (s_id,))
-            cmd_rows = cursor.fetchall()
+                SELECT id, start_time, end_time, duration_seconds, project_id, ai_summary
+                FROM sessions
+                WHERE start_time >= ? AND start_time <= ?
+                ORDER BY start_time ASC
+            """, (start_ts, end_ts))
+            session_rows = cursor.fetchall()
             
-            commands = []
-            for c_row in cmd_rows:
-                c_id, timestamp, command_text, exit_code, _, cmd_p_id = c_row
-                commands.append(Command(
-                    id=c_id,
-                    timestamp=timestamp,
-                    command=command_text,
-                    exit_code=exit_code,
-                    session_id=s_id,
-                    project_id=cmd_p_id
-                ))
+            sessions = []
+            for row in session_rows:
+                s_id, start, end, duration, p_id, ai_sum = row
+    
                 
-            # 3. Fetch all commits for this session (5m pre, 10m post buffers)
-            commits = []
-            if p_id is not None:
                 cursor.execute("""
-                    SELECT hash, timestamp, message, cleaned_message
-                    FROM commits
-                    WHERE project_id = ? AND timestamp >= ? AND timestamp <= ?
+                    SELECT id, timestamp, command, exit_code, session_id, project_id
+                    FROM commands
+                    WHERE session_id = ?
                     ORDER BY timestamp ASC
-                """, (p_id, start - 300, end + 600))
-                for c_row in cursor.fetchall():
-                    commits.append({
-                        "hash": c_row[0],
-                        "timestamp": c_row[1],
-                        "message": c_row[2],
-                        "cleaned_message": c_row[3]
-                    })
+                """, (s_id,))
+                cmd_rows = cursor.fetchall()
+                
+                commands = []
+                for c_row in cmd_rows:
+                    c_id, timestamp, command_text, exit_code, _, cmd_p_id = c_row
+                    commands.append(Command(
+                        id=c_id,
+                        timestamp=timestamp,
+                        command=command_text,
+                        exit_code=exit_code,
+                        session_id=s_id,
+                        project_id=cmd_p_id
+                    ))
                     
-            sessions.append(Session(
-                id=s_id,
-                start_time=start,
-                end_time=end,
-                duration_seconds=duration,
-                project_id=p_id,
-                commands=commands,
-                commits=commits,
-                ai_summary=ai_sum
-            ))
-
-            
-        conn.close()
+                # 3. Fetch all commits for this session (5m pre, 10m post buffers)
+                commits = []
+                if p_id is not None:
+                    cursor.execute("""
+                        SELECT hash, timestamp, message, cleaned_message
+                        FROM commits
+                        WHERE project_id = ? AND timestamp >= ? AND timestamp <= ?
+                        ORDER BY timestamp ASC
+                    """, (p_id, start - 300, end + 600))
+                    for c_row in cursor.fetchall():
+                        commits.append({
+                            "hash": c_row[0],
+                            "timestamp": c_row[1],
+                            "message": c_row[2],
+                            "cleaned_message": c_row[3]
+                        })
+                        
+                sessions.append(Session(
+                    id=s_id,
+                    start_time=start,
+                    end_time=end,
+                    duration_seconds=duration,
+                    project_id=p_id,
+                    commands=commands,
+                    commits=commits,
+                    ai_summary=ai_sum
+                ))
+        finally:
+            conn.close()
         return sessions
 
     def get_project_sessions(self, project_id: int, start_ts: int) -> List[Session]:
         """Get sessions for a specific project starting after the start_ts timestamp"""
         conn = self.get_connection()
-        cursor = conn.cursor()
-        
-        cursor.execute("""
-            SELECT id, start_time, end_time, duration_seconds, project_id, ai_summary
-            FROM sessions
-            WHERE project_id = ? AND start_time >= ?
-            ORDER BY start_time ASC
-        """, (project_id, start_ts))
-        session_rows = cursor.fetchall()
-        
-        sessions = []
-        for row in session_rows:
-            s_id, start, end, duration, p_id, ai_sum = row
-
+        try:
+            cursor = conn.cursor()
             
             cursor.execute("""
-                SELECT id, timestamp, command, exit_code, session_id, project_id
-                FROM commands
-                WHERE session_id = ?
-                ORDER BY timestamp ASC
-            """, (s_id,))
-            cmd_rows = cursor.fetchall()
+                SELECT id, start_time, end_time, duration_seconds, project_id, ai_summary
+                FROM sessions
+                WHERE project_id = ? AND start_time >= ?
+                ORDER BY start_time ASC
+            """, (project_id, start_ts))
+            session_rows = cursor.fetchall()
             
-            commands = []
-            for c_row in cmd_rows:
-                c_id, timestamp, command_text, exit_code, _, cmd_p_id = c_row
-                commands.append(Command(
-                    id=c_id,
-                    timestamp=timestamp,
-                    command=command_text,
-                    exit_code=exit_code,
-                    session_id=s_id,
-                    project_id=cmd_p_id
-                ))
+            sessions = []
+            for row in session_rows:
+                s_id, start, end, duration, p_id, ai_sum = row
+    
                 
-            # 3. Fetch all commits for this session (5m pre, 10m post buffers)
-            commits = []
-            if p_id is not None:
                 cursor.execute("""
-                    SELECT hash, timestamp, message, cleaned_message
-                    FROM commits
-                    WHERE project_id = ? AND timestamp >= ? AND timestamp <= ?
+                    SELECT id, timestamp, command, exit_code, session_id, project_id
+                    FROM commands
+                    WHERE session_id = ?
                     ORDER BY timestamp ASC
-                """, (p_id, start - 300, end + 600))
-                for c_row in cursor.fetchall():
-                    commits.append({
-                        "hash": c_row[0],
-                        "timestamp": c_row[1],
-                        "message": c_row[2],
-                        "cleaned_message": c_row[3]
-                    })
+                """, (s_id,))
+                cmd_rows = cursor.fetchall()
+                
+                commands = []
+                for c_row in cmd_rows:
+                    c_id, timestamp, command_text, exit_code, _, cmd_p_id = c_row
+                    commands.append(Command(
+                        id=c_id,
+                        timestamp=timestamp,
+                        command=command_text,
+                        exit_code=exit_code,
+                        session_id=s_id,
+                        project_id=cmd_p_id
+                    ))
                     
-            sessions.append(Session(
-                id=s_id,
-                start_time=start,
-                end_time=end,
-                duration_seconds=duration,
-                project_id=p_id,
-                commands=commands,
-                commits=commits,
-                ai_summary=ai_sum
-            ))
-            
-        conn.close()
+                # 3. Fetch all commits for this session (5m pre, 10m post buffers)
+                commits = []
+                if p_id is not None:
+                    cursor.execute("""
+                        SELECT hash, timestamp, message, cleaned_message
+                        FROM commits
+                        WHERE project_id = ? AND timestamp >= ? AND timestamp <= ?
+                        ORDER BY timestamp ASC
+                    """, (p_id, start - 300, end + 600))
+                    for c_row in cursor.fetchall():
+                        commits.append({
+                            "hash": c_row[0],
+                            "timestamp": c_row[1],
+                            "message": c_row[2],
+                            "cleaned_message": c_row[3]
+                        })
+                        
+                sessions.append(Session(
+                    id=s_id,
+                    start_time=start,
+                    end_time=end,
+                    duration_seconds=duration,
+                    project_id=p_id,
+                    commands=commands,
+                    commits=commits,
+                    ai_summary=ai_sum
+                ))
+        finally:
+            conn.close()
         return sessions
 
     def save_session_ai_summary(self, session_id: int, ai_summary: str) -> None:
@@ -535,12 +537,14 @@ class Database:
     def get_macro_summary(self, timeframe_id: str) -> Optional[str]:
         """Fetch cached macro summary (executive review) for a given timeframe"""
         conn = self.get_connection()
-        cursor = conn.cursor()
-        cursor.execute("""
-            SELECT summary FROM macro_summaries WHERE timeframe_id = ?
-        """, (timeframe_id,))
-        row = cursor.fetchone()
-        conn.close()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT summary FROM macro_summaries WHERE timeframe_id = ?
+            """, (timeframe_id,))
+            row = cursor.fetchone()
+        finally:
+            conn.close()
         return row[0] if row else None
 
     def save_macro_summary(self, timeframe_id: str, type_str: str, summary: str) -> None:
@@ -565,78 +569,80 @@ class Database:
     def get_all_projects_with_stats(self) -> List[Project]:
         """Get all projects from database, joining with sessions to aggregate statistics"""
         conn = self.get_connection()
-        cursor = conn.cursor()
-        
-        cursor.execute("""
-            SELECT p.id, p.name, p.path, p.first_seen, p.last_seen,
-                   COUNT(s.id) AS session_count,
-                   SUM(s.duration_seconds) AS total_time
-            FROM projects p
-            LEFT JOIN sessions s ON p.id = s.project_id
-            GROUP BY p.id
-        """)
-        
-        rows = cursor.fetchall()
-        projects = []
-        for row in rows:
-            p_id, name, path, first, last, s_count, t_time = row
-            projects.append(Project(
-                id=p_id,
-                name=name,
-                path=path,
-                first_seen=first,
-                last_seen=last,
-                session_count=s_count or 0,
-                total_time=t_time or 0
-            ))
+        try:
+            cursor = conn.cursor()
             
-        conn.close()
+            cursor.execute("""
+                SELECT p.id, p.name, p.path, p.first_seen, p.last_seen,
+                       COUNT(s.id) AS session_count,
+                       SUM(s.duration_seconds) AS total_time
+                FROM projects p
+                LEFT JOIN sessions s ON p.id = s.project_id
+                GROUP BY p.id
+            """)
+            
+            rows = cursor.fetchall()
+            projects = []
+            for row in rows:
+                p_id, name, path, first, last, s_count, t_time = row
+                projects.append(Project(
+                    id=p_id,
+                    name=name,
+                    path=path,
+                    first_seen=first,
+                    last_seen=last,
+                    session_count=s_count or 0,
+                    total_time=t_time or 0
+                ))
+        finally:
+            conn.close()
         return projects
 
     def search_projects(self, query: str) -> List[Project]:
         """Fuzzy search projects by name or path using case-insensitive LIKE matches"""
         conn = self.get_connection()
-        cursor = conn.cursor()
-        
-        cursor.execute("""
-            SELECT p.id, p.name, p.path, p.first_seen, p.last_seen,
-                   COUNT(s.id) AS session_count,
-                   SUM(s.duration_seconds) AS total_time
-            FROM projects p
-            LEFT JOIN sessions s ON p.id = s.project_id
-            WHERE p.name LIKE ? OR p.path LIKE ?
-            GROUP BY p.id
-        """, (f"%{query}%", f"%{query}%"))
-        
-        rows = cursor.fetchall()
-        projects = []
-        for row in rows:
-            p_id, name, path, first, last, s_count, t_time = row
-            projects.append(Project(
-                id=p_id,
-                name=name,
-                path=path,
-                first_seen=first,
-                last_seen=last,
-                session_count=s_count or 0,
-                total_time=t_time or 0
-            ))
+        try:
+            cursor = conn.cursor()
             
-        conn.close()
-        
-        # Sort results: exact name matches first, then prefix matches, then substring matches, then path matches
-        def sort_key(p):
-            name_lower = p.name.lower()
-            query_lower = query.lower()
-            if name_lower == query_lower:
-                return (0, name_lower)
-            if name_lower.startswith(query_lower):
-                return (1, name_lower)
-            if query_lower in name_lower:
-                return (2, name_lower)
-            return (3, name_lower)
+            cursor.execute("""
+                SELECT p.id, p.name, p.path, p.first_seen, p.last_seen,
+                       COUNT(s.id) AS session_count,
+                       SUM(s.duration_seconds) AS total_time
+                FROM projects p
+                LEFT JOIN sessions s ON p.id = s.project_id
+                WHERE p.name LIKE ? OR p.path LIKE ?
+                GROUP BY p.id
+            """, (f"%{query}%", f"%{query}%"))
             
-        projects.sort(key=sort_key)
+            rows = cursor.fetchall()
+            projects = []
+            for row in rows:
+                p_id, name, path, first, last, s_count, t_time = row
+                projects.append(Project(
+                    id=p_id,
+                    name=name,
+                    path=path,
+                    first_seen=first,
+                    last_seen=last,
+                    session_count=s_count or 0,
+                    total_time=t_time or 0
+                ))
+            
+            # Sort results: exact name matches first, then prefix matches, then substring matches, then path matches
+            def sort_key(p):
+                name_lower = p.name.lower()
+                query_lower = query.lower()
+                if name_lower == query_lower:
+                    return (0, name_lower)
+                if name_lower.startswith(query_lower):
+                    return (1, name_lower)
+                if query_lower in name_lower:
+                    return (2, name_lower)
+                return (3, name_lower)
+                
+            projects.sort(key=sort_key)
+        finally:
+            conn.close()
         return projects
 
     def save_commits(self, project_id: int, commits: List[Dict]) -> None:
@@ -668,117 +674,119 @@ class Database:
     def get_session_commits(self, project_id: int, start_time: int, end_time: int) -> List[Dict]:
         """Fetch commits made during a session's time window (with pre and post buffers)"""
         conn = self.get_connection()
-        cursor = conn.cursor()
-        
-        # 5 minutes pre-buffer, 10 minutes post-buffer
-        cursor.execute("""
-            SELECT hash, timestamp, message, cleaned_message
-            FROM commits
-            WHERE project_id = ? AND timestamp >= ? AND timestamp <= ?
-            ORDER BY timestamp ASC
-        """, (project_id, start_time - 300, end_time + 600))
-        
-        rows = cursor.fetchall()
-        commits = []
-        for r in rows:
-            commits.append({
-                "hash": r[0],
-                "timestamp": r[1],
-                "message": r[2],
-                "cleaned_message": r[3]
-            })
+        try:
+            cursor = conn.cursor()
             
-        conn.close()
+            # 5 minutes pre-buffer, 10 minutes post-buffer
+            cursor.execute("""
+                SELECT hash, timestamp, message, cleaned_message
+                FROM commits
+                WHERE project_id = ? AND timestamp >= ? AND timestamp <= ?
+                ORDER BY timestamp ASC
+            """, (project_id, start_time - 300, end_time + 600))
+            
+            rows = cursor.fetchall()
+            commits = []
+            for r in rows:
+                commits.append({
+                    "hash": r[0],
+                    "timestamp": r[1],
+                    "message": r[2],
+                    "cleaned_message": r[3]
+                })
+        finally:
+            conn.close()
         return commits
 
     def search_sessions(self, query: str, project_filter: Optional[str] = None, since_ts: Optional[int] = None) -> List[Dict]:
         """Query sessions containing matching commands, matching project names, or matching commits"""
         conn = self.get_connection()
-        cursor = conn.cursor()
-        
-        query_val = f"%{query}%"
-        
-        sql = """
-            SELECT DISTINCT s.id, s.start_time, s.end_time, s.duration_seconds, s.project_id, p.name, p.path
-            FROM sessions s
-            LEFT JOIN projects p ON s.project_id = p.id
-            LEFT JOIN commands c ON s.id = c.session_id
-            LEFT JOIN commits co ON s.project_id = co.project_id 
-                AND co.timestamp >= s.start_time - 300 
-                AND co.timestamp <= s.end_time + 600
-            WHERE (
-                p.name LIKE ?
-                OR c.command LIKE ?
-                OR co.message LIKE ?
-                OR co.cleaned_message LIKE ?
-            )
-        """
-        params = [query_val, query_val, query_val, query_val]
-        
-        if project_filter:
-            sql += " AND p.name LIKE ?"
-            params.append(f"%{project_filter}%")
+        try:
+            cursor = conn.cursor()
             
-        if since_ts:
-            sql += " AND s.start_time >= ?"
-            params.append(since_ts)
+            query_val = f"%{query}%"
             
-        sql += " ORDER BY s.start_time DESC"
-        
-        cursor.execute(sql, params)
-        rows = cursor.fetchall()
-        
-        results = []
-        for row in rows:
-            s_id, start_time, end_time, duration, p_id, p_name, p_path = row
+            sql = """
+                SELECT DISTINCT s.id, s.start_time, s.end_time, s.duration_seconds, s.project_id, p.name, p.path
+                FROM sessions s
+                LEFT JOIN projects p ON s.project_id = p.id
+                LEFT JOIN commands c ON s.id = c.session_id
+                LEFT JOIN commits co ON s.project_id = co.project_id 
+                    AND co.timestamp >= s.start_time - 300 
+                    AND co.timestamp <= s.end_time + 600
+                WHERE (
+                    p.name LIKE ?
+                    OR c.command LIKE ?
+                    OR co.message LIKE ?
+                    OR co.cleaned_message LIKE ?
+                )
+            """
+            params = [query_val, query_val, query_val, query_val]
             
-            # Fetch all commands in this session
-            cursor.execute("""
-                SELECT command FROM commands WHERE session_id = ? ORDER BY timestamp ASC
-            """, (s_id,))
-            all_cmds = [r[0] for r in cursor.fetchall()]
+            if project_filter:
+                sql += " AND p.name LIKE ?"
+                params.append(f"%{project_filter}%")
+                
+            if since_ts:
+                sql += " AND s.start_time >= ?"
+                params.append(since_ts)
+                
+            sql += " ORDER BY s.start_time DESC"
             
-            # Fetch matching commands in this session
-            cursor.execute("""
-                SELECT command FROM commands WHERE session_id = ? AND command LIKE ? ORDER BY timestamp ASC
-            """, (s_id, query_val))
-            matching_cmds = [r[0] for r in cursor.fetchall()]
+            cursor.execute(sql, params)
+            rows = cursor.fetchall()
             
-            # Fetch all commits in this session (using buffer)
-            all_commits = []
-            matching_commits = []
-            if p_id is not None:
+            results = []
+            for row in rows:
+                s_id, start_time, end_time, duration, p_id, p_name, p_path = row
+                
+                # Fetch all commands in this session
                 cursor.execute("""
-                    SELECT hash, timestamp, message, cleaned_message 
-                    FROM commits 
-                    WHERE project_id = ? AND timestamp >= ? AND timestamp <= ?
-                    ORDER BY timestamp ASC
-                """, (p_id, start_time - 300, end_time + 600))
-                for c_row in cursor.fetchall():
-                    c_dict = {
-                        "hash": c_row[0],
-                        "timestamp": c_row[1],
-                        "message": c_row[2],
-                        "cleaned_message": c_row[3]
-                    }
-                    all_commits.append(c_dict)
-                    # Check if commit matches query
-                    if query.lower() in c_row[2].lower() or query.lower() in c_row[3].lower():
-                        matching_commits.append(c_dict)
-                        
-            results.append({
-                "session_id": s_id,
-                "start_time": start_time,
-                "end_time": end_time,
-                "duration_seconds": duration,
-                "project_id": p_id,
-                "project_name": p_name or "General / No Project",
-                "project_path": p_path or "",
-                "all_commands": all_cmds,
-                "matching_commands": matching_cmds,
-                "all_commits": all_commits,
-                "matching_commits": matching_commits
-            })
-            
-        conn.close()
+                    SELECT command FROM commands WHERE session_id = ? ORDER BY timestamp ASC
+                """, (s_id,))
+                all_cmds = [r[0] for r in cursor.fetchall()]
+                
+                # Fetch matching commands in this session
+                cursor.execute("""
+                    SELECT command FROM commands WHERE session_id = ? AND command LIKE ? ORDER BY timestamp ASC
+                """, (s_id, query_val))
+                matching_cmds = [r[0] for r in cursor.fetchall()]
+                
+                # Fetch all commits in this session (using buffer)
+                all_commits = []
+                matching_commits = []
+                if p_id is not None:
+                    cursor.execute("""
+                        SELECT hash, timestamp, message, cleaned_message 
+                        FROM commits 
+                        WHERE project_id = ? AND timestamp >= ? AND timestamp <= ?
+                        ORDER BY timestamp ASC
+                    """, (p_id, start_time - 300, end_time + 600))
+                    for c_row in cursor.fetchall():
+                        c_dict = {
+                            "hash": c_row[0],
+                            "timestamp": c_row[1],
+                            "message": c_row[2],
+                            "cleaned_message": c_row[3]
+                        }
+                        all_commits.append(c_dict)
+                        # Check if commit matches query
+                        if query.lower() in c_row[2].lower() or query.lower() in c_row[3].lower():
+                            matching_commits.append(c_dict)
+                            
+                results.append({
+                    "session_id": s_id,
+                    "start_time": start_time,
+                    "end_time": end_time,
+                    "duration_seconds": duration,
+                    "project_id": p_id,
+                    "project_name": p_name or "General / No Project",
+                    "project_path": p_path or "",
+                    "all_commands": all_cmds,
+                    "matching_commands": matching_cmds,
+                    "all_commits": all_commits,
+                    "matching_commits": matching_commits
+                })
+        finally:
+            conn.close()
         return results

@@ -15,7 +15,8 @@ def is_git_repo(path: str) -> bool:
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
-            check=False
+            check=False,
+            timeout=10
         )
         return res.returncode == 0
     except Exception:
@@ -86,7 +87,8 @@ def get_project_commits(project_path: str, since_ts: int) -> List[Dict]:
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
-            check=False
+            check=False,
+            timeout=10
         )
         if res.returncode != 0:
             return []
@@ -139,7 +141,8 @@ def get_timeframe_git_stats(project_paths: List[str], since_ts: int, until_ts: i
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
-                check=False
+                check=False,
+                timeout=10
             )
             if res.returncode == 0:
                 for line in res.stdout.splitlines():
@@ -166,7 +169,8 @@ def get_timeframe_git_stats(project_paths: List[str], since_ts: int, until_ts: i
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
-                check=False
+                check=False,
+                timeout=10
             )
             if res.returncode == 0:
                 for line in res.stdout.splitlines():

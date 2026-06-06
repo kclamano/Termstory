@@ -34,9 +34,10 @@ def test_get_github_avatar_fetch(monkeypatch):
     import os
     import time
     
+    from termstory.config import get_app_dir
     test_user = f"octocat_test_{int(time.time())}"
-    db_dir = os.path.expanduser("~/.termstory")
-    disk_path = os.path.join(db_dir, f"avatar_{test_user}_2_2.txt")
+    db_dir = get_app_dir("data")
+    disk_path = os.path.join(db_dir, f"avatar_braille_{test_user}_2_2.txt")
     if os.path.exists(disk_path):
         try:
             os.remove(disk_path)

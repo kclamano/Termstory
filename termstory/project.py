@@ -85,8 +85,10 @@ def disambiguate_project_names(projects: List[Project]) -> Dict[int, str]:
             for p in projs:
                 parent_dir = os.path.dirname(p.path)
                 home = os.path.expanduser("~")
-                if parent_dir.startswith(home):
-                    parent_dir = parent_dir.replace(home, "~", 1)
+                if parent_dir == home:
+                    parent_dir = "~"
+                elif parent_dir.startswith(home + "/"):
+                    parent_dir = "~" + parent_dir[len(home):]
                 display_names[p.id] = f"{p.name} ({parent_dir})"
     return display_names
 
@@ -199,15 +201,18 @@ def detect_projects(sessions: List[Session]) -> List[Project]:
                     if resolved:
                         cwd = resolved
                         
-        if has_cd:
-            # The project path is the resolved cwd at the end of the session
-            project_root = find_project_root(cwd)
-            
+        # The project path is the resolved cwd at the end of the session
+        project_root = find_project_root(cwd)
+        is_valid_project = project_root != home and project_root != "/"
+        
+        if is_valid_project:
             if project_root not in projects_dict:
                 # Convert absolute project root back to a user-friendly path (using ~ if possible)
                 display_path = project_root
-                if project_root.startswith(home):
-                    display_path = project_root.replace(home, "~", 1)
+                if project_root == home:
+                    display_path = "~"
+                elif project_root.startswith(home + "/"):
+                    display_path = "~" + project_root[len(home):]
                     
                 name = humanize_project_name(project_root)
                 project = Project(

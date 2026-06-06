@@ -242,6 +242,26 @@ def get_session_memory_str(session: Session) -> str:
         
     if session.ai_summary:
         val = strip_ansi(session.ai_summary)
+        # Parse multiline summaries to get the first high-signal content line
+        lines = [line.strip() for line in val.split("\n") if line.strip()]
+        for line in lines:
+            if line.startswith("[") and line.endswith("]"):
+                continue
+            clean = line
+            import re
+            # Matches prefixes like "├─ 🔨 Built:", "• Hacked:", etc.
+            clean = re.sub(
+                r'^(├─|└─|•|\*)\s*(🔨|🔧|🚀|🧠|🤖|📂|⌨️)?\s*(Built|Flow|Result|Story|Hacked|Tooling|Outcome|Project|Action|Pattern):\s*', 
+                '', 
+                clean, 
+                flags=re.IGNORECASE
+            )
+            # Remove any residual leading symbols/spaces
+            clean = clean.lstrip("├─└─•* \t🔨🔧🚀🧠🤖")
+            if clean:
+                session._cached_memory_str = clean
+                return clean
+        
         session._cached_memory_str = val
         return val
         
@@ -1369,7 +1389,40 @@ class DetailsCanvas(VerticalScroll):
 
 
 # ==========================================
-# 3. MAIN WORKSPACE APP
+# 3. RESET CONFIRMATION MODAL
+# ==========================================
+
+class ResetConfirmScreen(ModalScreen):
+    """Confirmation dialog before resetting TermStory data."""
+    
+    BINDINGS = [
+        Binding("y", "confirm_reset", "Yes, Reset"),
+        Binding("n", "cancel_reset", "No, Cancel"),
+        Binding("escape", "cancel_reset", "Cancel"),
+    ]
+    
+    def compose(self) -> ComposeResult:
+        yield Static(
+            "\n\n"
+            "[bold red]⚠️  RESET TERMSTORY  ⚠️[/bold red]\n\n"
+            "[bold]This will permanently delete:[/bold]\n"
+            "  • Your entire command history database\n"
+            "  • All AI summaries and cached data\n"
+            "  • Your configuration and API keys\n"
+            "  • Cached avatar images\n\n"
+            "[bold yellow]This action cannot be undone.[/bold yellow]\n\n"
+            "[dim]Press [bold]Y[/bold] to confirm reset, [bold]N[/bold] or [bold]Esc[/bold] to cancel[/dim]",
+            id="reset-confirm-content"
+        )
+    
+    def action_confirm_reset(self) -> None:
+        self.dismiss(True)
+    
+    def action_cancel_reset(self) -> None:
+        self.dismiss(False)
+
+# ==========================================
+# 4. MAIN WORKSPACE APP
 # ==========================================
 
 class TermStoryWorkspace(App):
@@ -1382,7 +1435,7 @@ class TermStoryWorkspace(App):
         Binding("question_mark", "show_help", "Help", show=True, key_display="?"),
         Binding("o", "show_onboarding", "Configure AI", show=True, key_display="o"),
         Binding("ctrl+shift+h", "reset_termstory", "Reset App", show=True, key_display="ctrl+shift+h"),
-        Binding("ctrl+r", "reset_termstory", "Reset App", show=False),
+
         Binding("ctrl+down", "scroll_canvas_down", "", show=False),
         Binding("ctrl+up", "scroll_canvas_up", "", show=False),
         Binding("ctrl+j", "scroll_canvas_down", "", show=False),
@@ -1571,6 +1624,17 @@ class TermStoryWorkspace(App):
         margin: 1 0;
         height: auto;
     }
+    ResetConfirmScreen {
+        align: center middle;
+    }
+    #reset-confirm-content {
+        width: 56;
+        height: auto;
+        padding: 2 4;
+        border: thick $error;
+        background: #1a1a2e;
+        text-align: center;
+    }
     """
     
     def __init__(self, db: Database, days_limit: Optional[int] = 90, config_override: Optional[dict] = None):
@@ -1587,6 +1651,9 @@ class TermStoryWorkspace(App):
         self.bulk_running_timeframes = {}
         self.generating_session_stories = set()
         self.was_reset = False
+        self.auto_select_today_on_mount = True
+
+
         
     def copy_to_clipboard(self, text: str) -> None:
         """Robust OS-level clipboard writer using system commands (e.g. pbcopy on macOS),
@@ -1664,6 +1731,17 @@ class TermStoryWorkspace(App):
             self.push_screen(OnboardingScreen(self.config), self.handle_onboarding_result)
         
         # Automatically focus today's date node or the most recent date node
+        if self.auto_select_today_on_mount:
+            def do_initial_focus_and_select() -> None:
+                self.query_one("#history-navigator").focus()
+                self.select_today_or_latest_date_node()
+            self.call_after_refresh(do_initial_focus_and_select)
+        else:
+            tree.focus()
+
+    def select_today_or_latest_date_node(self) -> None:
+        """Automatically focus/select today's date node or the most recent date node."""
+        tree = self.query_one("#history-navigator")
         today_str = get_current_time().strftime("%Y-%m-%d")
         all_date_nodes = []
         target_node = None
@@ -1689,7 +1767,6 @@ class TermStoryWorkspace(App):
             tree.select_node(target_node)
         else:
             self.query_one("#details-canvas").render_time_summary("📊 Overall Dashboard Summary", self.sessions, self.projects)
-            tree.focus()
 
     def handle_onboarding_result(self, result: Optional[dict]) -> None:
         if result:
@@ -1702,8 +1779,14 @@ class TermStoryWorkspace(App):
                 get_github_avatar_ascii(guser)
                 
             self.update_stats_header()
-            self.refresh_details_canvas()
-        self.query_one("#history-navigator").focus()
+            
+            def post_onboarding() -> None:
+                self.query_one("#history-navigator").focus()
+                self.select_today_or_latest_date_node()
+                
+            self.call_after_refresh(post_onboarding)
+        else:
+            self.query_one("#history-navigator").focus()
 
     def update_stats_header(self) -> None:
         stats = calculate_dashboard_stats(self.sessions, self.projects, days_limit=self.days_limit or 90)
@@ -1983,11 +2066,18 @@ class TermStoryWorkspace(App):
                 top_buffers.append(formatted_buf)
         else:
             top_proj = list(project_seconds.keys())[0] if project_seconds else "Other"
-            top_buffers = [
-                f"📄 `{top_proj.lower()}/main.py`      ──► 41h 12m  │ Focus Layer: Core Logic",
-                f"📄 `{top_proj.lower()}/utils.py`     ──► 19h 45m  │ Focus Layer: Core Logic",
-                f"📄 `tests/test_main.py`  ──► 12h 08m  │ Focus Layer: Testing"
+            fallback_files = [
+                (f"{top_proj.lower()}/main.py", 0.5, "Core Logic"),
+                (f"{top_proj.lower()}/utils.py", 0.3, "Core Logic"),
+                (f"tests/test_main.py", 0.2, "Testing")
             ]
+            for fn, ratio, focus_layer in fallback_files:
+                file_sec = int(total_time_seconds * ratio * 0.6)
+                file_dur_str = format_duration(file_sec)
+                file_part = f"📄 `{fn}`"
+                arrow_part = f"──► {file_dur_str}"
+                formatted_buf = f"{file_part.ljust(27)}{arrow_part.ljust(12)}│ Focus Layer: {focus_layer}"
+                top_buffers.append(formatted_buf)
         top_editor_buffers_with_durations = "\n".join(top_buffers)
         
         amends_count = sum(1 for cmd in all_commands if "commit --amend" in cmd.command)
@@ -2194,9 +2284,12 @@ class TermStoryWorkspace(App):
         self.exit()
         
     def action_reset_termstory(self) -> None:
-        """Reset the application state, set the reset flag, and exit."""
-        self.was_reset = True
-        self.exit()
+        """Show confirmation dialog before resetting."""
+        def on_dismiss(confirmed: bool) -> None:
+            if confirmed:
+                self.was_reset = True
+                self.exit()
+        self.push_screen(ResetConfirmScreen(), on_dismiss)
         
     def action_scroll_canvas_down(self) -> None:
         self.query_one("#details-canvas").scroll_relative(y=3)
@@ -2253,8 +2346,8 @@ class TermStoryWorkspace(App):
         self.debounce_search(query)
         
     def on_tree_node_selected(self, event: Tree.NodeSelected) -> None:
-        # Avoid handling selection while tree is being repopulated
-        if getattr(self, "_populating_tree", False):
+        # Avoid handling selection while tree is being repopulated or app is shutting down
+        if getattr(self, "_populating_tree", False) or not self._screen_stack:
             return
         self._show_node_details(event.node, animate=True)
         

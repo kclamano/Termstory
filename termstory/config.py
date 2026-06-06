@@ -2,32 +2,69 @@ import os
 import json
 from typing import List, Any
 
+def get_app_dir(dir_type: str = "data") -> str:
+    """Get the appropriate application directory.
+    
+    If ~/.termstory already exists, we use it for backward compatibility.
+    Otherwise:
+      - For "config": Use $XDG_CONFIG_HOME/termstory or ~/.config/termstory on Linux/macOS.
+      - For "data" (or others): Use $XDG_DATA_HOME/termstory or ~/.local/share/termstory on Linux/macOS.
+    """
+    legacy_dir = os.path.expanduser("~/.termstory")
+    if os.path.exists(legacy_dir):
+        return legacy_dir
+        
+    if os.name != "nt":
+        if dir_type == "config":
+            xdg_config = os.environ.get("XDG_CONFIG_HOME")
+            if xdg_config:
+                return os.path.join(xdg_config, "termstory")
+            return os.path.expanduser("~/.config/termstory")
+        else: # "data" or "cache"
+            xdg_data = os.environ.get("XDG_DATA_HOME")
+            if xdg_data:
+                return os.path.join(xdg_data, "termstory")
+            return os.path.expanduser("~/.local/share/termstory")
+            
+    return legacy_dir
+
 def get_history_files() -> List[str]:
     """Return a list of existing shell history file paths"""
     history_files = []
     
-    # Check default paths for zsh and bash
-    zsh_hist = os.path.expanduser("~/.zsh_history")
-    bash_hist = os.path.expanduser("~/.bash_history")
-    
-    if os.path.exists(zsh_hist):
-        history_files.append(zsh_hist)
-    if os.path.exists(bash_hist):
-        history_files.append(bash_hist)
+    # 1. Check HISTFILE env variable first
+    histfile = os.environ.get("HISTFILE")
+    if histfile:
+        histfile = os.path.expanduser(histfile)
+        if os.path.exists(histfile) and histfile not in history_files:
+            history_files.append(histfile)
+            
+    # 2. Check other common known paths
+    candidate_paths = [
+        "~/.zsh_history",
+        "~/.bash_history",
+        "~/.zhistory",
+        "~/.histfile",
+    ]
+    for path in candidate_paths:
+        expanded = os.path.expanduser(path)
+        if os.path.exists(expanded) and expanded not in history_files:
+            history_files.append(expanded)
         
     return history_files
 
 def get_db_path() -> str:
     """Return the path to the sqlite database, creating parent directories if needed"""
-    db_dir = os.path.expanduser("~/.termstory")
+    db_dir = get_app_dir("data")
     os.makedirs(db_dir, exist_ok=True)
     return os.path.join(db_dir, "termstory.db")
 
 def get_config_path() -> str:
     """Return the path to the config JSON file"""
-    db_dir = os.path.expanduser("~/.termstory")
+    db_dir = get_app_dir("config")
     os.makedirs(db_dir, exist_ok=True)
     return os.path.join(db_dir, "config.json")
+
 
 def translate_legacy_key(config: dict, key: str) -> str:
     """Translate a legacy flat config key to the new nested dot path structure."""
