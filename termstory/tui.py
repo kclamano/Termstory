@@ -496,7 +496,7 @@ class OnboardingScreen(ModalScreen[dict]):
             github_username = self.query_one("#input-github-username").value.strip().lstrip('@')
             
             error_label = self.query_one("#error-api-key")
-            if self.selected_provider in ("groq", "openai") and not api_key:
+            if self.selected_provider in ("groq", "openai", "custom") and not api_key:
                 error_label.update("API Key cannot be empty.")
                 error_label.styles.display = "block"
                 return
