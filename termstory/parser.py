@@ -188,7 +188,12 @@ def parse_zsh_history(
     # Items that the Detective resolves get is_legacy=False and a recovery_source string.
     # Truly unresolvable items get placed by the classic 1-second step-back below.
     if legacy_items:
-        resolved_paths = project_paths() if callable(project_paths) else project_paths
+        resolved_paths = []
+        if project_paths:
+            try:
+                resolved_paths = project_paths() if callable(project_paths) else project_paths
+            except Exception:
+                pass
         detective = TimestampDetective(
             search_root=os.path.expanduser("~"),
             project_paths=resolved_paths or []

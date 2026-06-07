@@ -582,6 +582,74 @@ async def test_tui_bulk_auto_summarize(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_tui_bulk_auto_summarize_fail_fast(monkeypatch):
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        db_path = os.path.join(tmp_dir, "test.db")
+        db = Database(db_path)
+        db.init_db()
+        
+        monkeypatch.setattr("time.sleep", lambda secs: None)
+        
+        now_ts = int(time.time()) - 120
+        p = Project(id=1, name="Proj A", path="~/proj-a", first_seen=now_ts, last_seen=now_ts + 60, session_count=2, total_time=0)
+        cmd1 = Command(timestamp=now_ts, command="git diff", exit_code=0, session_id=1, project_id=1)
+        s1 = Session(id=1, start_time=now_ts, end_time=now_ts, duration_seconds=0, project_id=1, commands=[cmd1], ai_summary=None)
+        cmd2 = Command(timestamp=now_ts + 60, command="git diff", exit_code=0, session_id=2, project_id=1)
+        s2 = Session(id=2, start_time=now_ts + 60, end_time=now_ts + 60, duration_seconds=0, project_id=1, commands=[cmd2], ai_summary=None)
+        db.save_data([p], [s1, s2], [cmd1, cmd2])
+        
+        app = TermStoryWorkspace(
+            db, 
+            days_limit=30, 
+            config_override={
+                "has_seen_onboarding": True, 
+                "ai_enabled": True, 
+                "active_provider": "groq",
+                "providers": {
+                    "groq": {
+                        "api_key": "gsk_test",
+                        "api_base_url": "https://api.groq.com/openai/v1",
+                        "model_name": "llama3"
+                    }
+                }
+            }
+        )
+        
+        called = []
+        def mock_generate_ai_summary(commands, api_key, api_base_url, model_name, provider, *args, **kwargs):
+            called.append(commands)
+            return None  # Simulate failure
+            
+        monkeypatch.setattr("termstory.tui.generate_ai_summary", mock_generate_ai_summary)
+        monkeypatch.setattr("termstory.ai.get_last_ai_error", lambda: "API connection timeout")
+        
+        notifications = []
+        def mock_notify(message, severity="info", title="", timeout=None):
+            notifications.append((message, severity))
+            
+        monkeypatch.setattr(app, "notify", mock_notify)
+        
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            
+            # Press the bulk auto-summarize button programmatically
+            date_str = datetime.fromtimestamp(now_ts).strftime("%Y-%m-%d")
+            app.query_one(f"#btn-bulk-{date_str}-date").press()
+            await pilot.pause()
+            
+            import asyncio
+            for _ in range(50):
+                if len(notifications) >= 2:
+                    break
+                await asyncio.sleep(0.05)
+            
+            # Assert generate_ai_summary was called exactly once, since we fail-fast/break on the first error
+            assert len(called) == 1
+            assert any("Failed to generate story for session 1: API connection timeout" in msg for msg, sev in notifications)
+            assert any("Bulk auto-summarization stopped. Succeeded: 0/2." in msg for msg, sev in notifications)
+
+
+@pytest.mark.asyncio
 async def test_tui_help_screen():
     with tempfile.TemporaryDirectory() as tmp_dir:
         db_path = os.path.join(tmp_dir, "test.db")

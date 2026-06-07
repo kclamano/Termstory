@@ -53,6 +53,12 @@ Enabling history timestamps in shell config files (via `setopt EXTENDED_HISTORY`
   - Normalized all spaces and newlines (via `" ".join(str.split())`) on surfaced HTTPError messages to match generic exception format paths and prevent bad formatting in UI toasts.
   - Refactored project repository scanning (`discover_project_paths`) in `cli.py` to run lazily. Discovered paths are passed as a callable which is only executed inside the Zsh history parser when legacy commands are actually encountered, preventing startup/search slowdowns for fully timestamped histories.
   - Added unit test `test_parse_all_histories_project_paths_propagation_callable` in `tests/test_parser.py` and `test_http_error_empty_body_fallback_to_reason`/`test_http_error_whitespace_normalization` in `tests/test_ai_error_surfacing.py`.
+- **PR Self-Review Enhancements**:
+  - Wrapped `project_paths()` execution in `parser.py` in a try-except block to prevent unhandled exceptions (e.g. read permission errors) during directory scanning from crashing shell history parsing.
+  - Improved `_run_bulk_generation` in `tui.py` to break early/fail-fast on the first error to avoid alert spamming and redundant network calls.
+  - Tracked successes and added a warning toast displaying the count of successful generations.
+  - Added `test_tui_bulk_auto_summarize_fail_fast` in `tests/test_tui.py` to verify the aborted success count and early break behavior.
 
 ---
+
 

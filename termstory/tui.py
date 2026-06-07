@@ -2306,8 +2306,11 @@ class TermStoryWorkspace(App):
         self.bulk_running_timeframes[timeframe_id] = (0, total)
         self.call_from_thread(self.refresh_details_canvas)
         
+        success_count = 0
+        aborted = False
         for idx, session in enumerate(sessions_to_summarize):
             if self.config.get("active_provider", "disabled") == "disabled":
+                aborted = True
                 break
                 
             session.is_generating_story = True
@@ -2347,11 +2350,14 @@ class TermStoryWorkspace(App):
                 self.call_from_thread(self.set_timer, 15.0, clear_recent_bulk)
                 
                 self.call_from_thread(self.update_session_ui, session.id, summary, True)
+                success_count += 1
             else:
                 from termstory.ai import get_last_ai_error
                 err = get_last_ai_error()
                 err_msg = f"Failed to generate story for session {session.id}: {err}" if err else f"Failed to generate story for session {session.id}."
                 self.call_from_thread(self.notify, err_msg, severity="error")
+                aborted = True
+                break
                 
             self.bulk_running_timeframes[timeframe_id] = (idx + 1, total)
             
@@ -2367,7 +2373,10 @@ class TermStoryWorkspace(App):
                 time.sleep(2.0)
                 
         self.bulk_running_timeframes.pop(timeframe_id, None)
-        self.call_from_thread(self.notify, f"Bulk auto-summarization of {total} sessions completed!")
+        if aborted:
+            self.call_from_thread(self.notify, f"Bulk auto-summarization stopped. Succeeded: {success_count}/{total}.", severity="warning")
+        else:
+            self.call_from_thread(self.notify, f"Bulk auto-summarization completed! Succeeded: {success_count}/{total}.")
         self.call_from_thread(self.refresh_details_canvas)
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
