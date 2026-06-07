@@ -152,16 +152,26 @@ def parse_zsh_history(
         os.environ["TERMSTORY_MISSING_TIMESTAMPS"] = "1"
 
     # ── Resolve the base anchor_time used for commands the Detective can't place ──
-    # If there are real timestamped commands, anchor just before the oldest one.
-    # Otherwise fall back to the file's OS mtime (100% legacy file with no EXTENDED_HISTORY).
+    # Get file mtime as a common reference point — used in both branches below.
+    try:
+        file_mtime = int(os.path.getmtime(filepath))
+    except Exception:
+        file_mtime = int(datetime.now().timestamp())
+
+    n_legacy = len(legacy_items)
+
     if timestamped_items:
         oldest_ts = min(item["timestamp"] for item in timestamped_items)
-        anchor_time = oldest_ts - 60  # 60-second buffer so legacy commands don't overlap
+        # Push anchor back so 1-second steps don't cram everything into one day.
+        # Give each legacy command at least 10 seconds of breathing room.
+        # min() here picks the further-back timestamp (i.e. the older of the two),
+        # ensuring we never anchor later than file_mtime - 60.
+        natural_anchor = oldest_ts - max(60, n_legacy * 10)
+        anchor_time = min(natural_anchor, file_mtime - 60)
     else:
-        try:
-            anchor_time = int(os.path.getmtime(filepath))
-        except Exception:
-            anchor_time = int(datetime.now().timestamp())
+        # 100% legacy (no EXTENDED_HISTORY ever): anchor at file mtime pushed back
+        # by 10 seconds per legacy command so they spread across multiple days.
+        anchor_time = file_mtime - max(60, n_legacy * 10)
 
     # ── Build the final list of Commands ────────────────────────────────────────
     # Apply the database timestamp-locking lookup so synthetic timestamps are stable
@@ -242,10 +252,13 @@ def parse_zsh_history(
         ))
 
     # ── Phase 4: Step-back for truly unresolvable (no anchors found at all) ──────
+    # Use 10-second steps to match the anchor_time breathing room calculated above.
+    # This ensures commands are spread across days, not crammed into one afternoon.
     n_unresolvable = len(unresolvable)
     for idx, item in enumerate(unresolvable):
-        # Distribute evenly before anchor_time, preserving original order
-        fallback_ts = anchor_time + (idx - n_unresolvable + 1)
+        # idx=0 → oldest command: anchor_time - (n_unresolvable - 1) * 10
+        # idx=n-1 → newest command: anchor_time
+        fallback_ts = anchor_time + (idx - n_unresolvable) * 10
         resolved_ts = resolve_timestamp(item["command"], fallback_ts)
         resolved_commands.append(Command(
             timestamp=resolved_ts,

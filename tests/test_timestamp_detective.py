@@ -590,22 +590,26 @@ class TestInterpolation(unittest.TestCase):
         src = result[1]["detected_source"]
         self.assertIn("Interpolated", src)
 
-    def test_prefix_gap_step_back(self):
-        """Items before the first anchor should be stepped back 1 second each."""
+    @patch("termstory.timestamp_detective.TimestampDetective._find_oldest_repo_anchor")
+    def test_prefix_gap_step_back(self, mock_oldest):
+        """Items before the first anchor should be interpolated to an oldest bound."""
+        mock_oldest.return_value = 100
         items = self._make_enriched(None, None, 1000)
         result = self.d._interpolate(items)
-        # First anchor is at idx 2 with ts=1000
-        # prefix items at idx 0, 1 → ts = 1000 - 2, 1000 - 1
-        self.assertEqual(result[0]["detected_ts"], 1000 - 2)
-        self.assertEqual(result[1]["detected_ts"], 1000 - 1)
+        # First anchor is at idx 2 with ts=1000. Left bound is 100.
+        # prefix items at idx 0, 1. fraction = (0+1)/(2+1) = 1/3, (1+1)/(2+1) = 2/3
+        # ts0 = 100 + (1000 - 100) * 1/3 = 100 + 300 = 400
+        # ts1 = 100 + (1000 - 100) * 2/3 = 100 + 600 = 700
+        self.assertEqual(result[0]["detected_ts"], 400)
+        self.assertEqual(result[1]["detected_ts"], 700)
         self.assertIn("Pre-anchor", result[0]["detected_source"])
 
     def test_suffix_gap_step_forward(self):
-        """Items after the last anchor should be stepped forward 1 second each."""
+        """Items after the last anchor should be stepped forward 10 seconds each."""
         items = self._make_enriched(1000, None, None)
         result = self.d._interpolate(items)
-        self.assertEqual(result[1]["detected_ts"], 1001)
-        self.assertEqual(result[2]["detected_ts"], 1002)
+        self.assertEqual(result[1]["detected_ts"], 1010)
+        self.assertEqual(result[2]["detected_ts"], 1020)
         self.assertIn("Post-anchor", result[1]["detected_source"])
 
     def test_no_anchors_unchanged(self):

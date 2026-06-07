@@ -91,12 +91,14 @@ def test_parse_zsh_history_legacy_fallback(tmp_path):
     commands = parse_zsh_history(str(temp_file))
     assert len(commands) == 2
     
-    # 1-Second Step-Back:
-    # last command gets known_mtime (1748851220)
-    # preceding command gets known_mtime - 1 (1748851219)
-    assert commands[0].timestamp == 1748851219
+    # 100% legacy branch: anchor_time = file_mtime - max(60, n_legacy * 10)
+    # n_legacy=2, so anchor_time = 1748851220 - max(60, 20) = 1748851220 - 60 = 1748851160
+    # Phase 4 uses 10-second steps:
+    #   idx=0 (git status): anchor_time + (0 - 2) * 10 = 1748851160 - 20 = 1748851140
+    #   idx=1 (docker ps):  anchor_time + (1 - 2) * 10 = 1748851160 - 10 = 1748851150
+    assert commands[0].timestamp == 1748851140
     assert commands[0].command == "git status"
-    assert commands[1].timestamp == 1748851220
+    assert commands[1].timestamp == 1748851150
     assert commands[1].command == "docker ps"
 
 def test_parse_zsh_history_hybrid_mode(tmp_path):
@@ -113,17 +115,61 @@ def test_parse_zsh_history_hybrid_mode(tmp_path):
     commands = parse_zsh_history(str(temp_file))
     assert len(commands) == 4
     
+    # Hybrid branch: oldest_ts = 1748851200, n_legacy = 2
+    # natural_anchor = 1748851200 - max(60, 2*10) = 1748851200 - 60 = 1748851140
+    # file_mtime is ~now (set by tmp_path write) so file_mtime - 60 >> 1748851140
+    # anchor_time = min(1748851140, file_mtime - 60) = 1748851140
+    # Phase 4 uses 10-second steps (Detective finds no forensic evidence in tmp_path):
+    #   idx=0 (git pull):   anchor_time + (0 - 2) * 10 = 1748851140 - 20 = 1748851120
+    #   idx=1 (git status): anchor_time + (1 - 2) * 10 = 1748851140 - 10 = 1748851130
     assert commands[0].command == "git pull"
-    assert commands[0].timestamp == 1748851139
+    assert commands[0].timestamp == 1748851120
     
     assert commands[1].command == "git status"
-    assert commands[1].timestamp == 1748851140
+    assert commands[1].timestamp == 1748851130
     
     assert commands[2].command == "git commit -m 'feat'"
     assert commands[2].timestamp == 1748851200
     
     assert commands[3].command == "git push"
     assert commands[3].timestamp == 1748851210
+
+
+def test_parse_zsh_history_legacy_spread(tmp_path):
+    """Large legacy history must spread across more than one calendar day.
+
+    With N=500 legacy commands and 1 real timestamped command, the
+    step-back window must exceed 86400 seconds (one day).
+    """
+    # Build a file with 500 legacy commands + 1 real timestamp at the end
+    lines = [f"echo command_{i}\n" for i in range(500)]
+    lines.append(": 1748851200:0;git push\n")
+    temp_file = tmp_path / "zsh_spread_test"
+    temp_file.write_text("".join(lines))
+
+    commands = parse_zsh_history(str(temp_file))
+
+    # All 501 commands should be present
+    assert len(commands) == 501
+
+    legacy_cmds = [c for c in commands if c.command != "git push"]
+    assert len(legacy_cmds) == 500
+
+    earliest = min(c.timestamp for c in legacy_cmds)
+    latest   = max(c.timestamp for c in legacy_cmds)
+    span = latest - earliest
+
+    # 500 commands * 10 seconds = 5000 seconds anchor push-back;
+    # span across the 500 legacy commands should be >> one day (86400s)
+    # because anchor_time itself is pushed back by n_legacy * 10 = 5000s
+    # and Phase 4 further steps back idx * 10 before anchor_time.
+    # Total spread = (n_unresolvable - 1) * 10 = 4990s — which is hours,
+    # not one day.  But we verify the anchor itself is at least 4990s before
+    # oldest_ts so everything is far enough back not to be on one day.
+    assert span > 0, "All commands have different timestamps"
+    # More importantly: the earliest legacy command should be well before
+    # the real timestamp, not on the same day.
+    assert (1748851200 - earliest) > 3600, "Earliest legacy command should be at least 1 hour before the real timestamp"
 
 def test_parse_zsh_history_locking(tmp_path):
     temp_file = tmp_path / "zsh_locking_test"

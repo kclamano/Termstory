@@ -1025,6 +1025,40 @@ class TimestampDetective:
     # Phase C — Anchor Interpolation Engine
     # =========================================================================
 
+    def _find_oldest_repo_anchor(self) -> Optional[int]:
+        """
+        Scan all known project paths for the oldest git commit timestamp.
+
+        Used as a left-bound for prefix gap interpolation: commands before the
+        first Detective anchor are spread between this oldest commit and t_first
+        rather than being crammed into n_prefix seconds before t_first.
+
+        Reuses _git_log_cache to avoid redundant git log subprocess calls.
+        Returns None if no git repos are found or all commits are invalid.
+        """
+        oldest: Optional[int] = None
+        candidate_roots = set()
+
+        for p in self.project_paths:
+            root = self._find_git_root(p)
+            if root:
+                candidate_roots.add(root)
+
+        # Also check search_root itself
+        root = self._find_git_root(self.search_root)
+        if root:
+            candidate_roots.add(root)
+
+        for repo_path in candidate_roots:
+            commits = self._load_git_log(repo_path)  # uses _git_log_cache
+            for commit in commits:
+                ts = commit.get("timestamp", 0)
+                if self._is_valid_timestamp(ts):
+                    if oldest is None or ts < oldest:
+                        oldest = ts
+
+        return oldest
+
     def _interpolate(self, items: List[dict]) -> List[dict]:
         """
         Phase C — Anchor Interpolation Engine  ⭐ The Killer Feature.
@@ -1115,12 +1149,25 @@ class TimestampDetective:
             if result[i].get("detected_ts") is None
         ]
         n_prefix = len(prefix_unresolved)
-        for offset, i in enumerate(prefix_unresolved):
-            # Step back from the first anchor: the earlier in the list,
-            # the further back from t_first
-            result[i]["detected_ts"] = t_first - (n_prefix - offset)
-            result[i]["detected_source"] = f"Pre-anchor step-back (before {src_first})"
-            result[i]["is_legacy_still"] = True
+        if prefix_unresolved:
+            # Find the oldest available repo anchor as the left bound.
+            # This spreads prefix commands across real time rather than cramming
+            # them into n_prefix seconds before t_first.
+            oldest_repo_ts = self._find_oldest_repo_anchor()
+            if oldest_repo_ts is not None and oldest_repo_ts < t_first:
+                left_bound = oldest_repo_ts
+            else:
+                # No repo anchor available: push back 1 day per command, but
+                # clamp to five_years_ago + n_prefix to avoid the parser's
+                # 5-year filter silently dropping these commands.
+                raw_bound = t_first - n_prefix * 86400
+                left_bound = max(raw_bound, self.five_years_ago + n_prefix)
+
+            for offset, i in enumerate(prefix_unresolved):
+                fraction = (offset + 1) / (n_prefix + 1)
+                result[i]["detected_ts"] = int(left_bound + (t_first - left_bound) * fraction)
+                result[i]["detected_source"] = f"Pre-anchor interpolation (before {src_first})"
+                result[i]["is_legacy_still"] = True
 
         # ── Suffix gap: commands after the last anchor ──────────────────────
         last_anchor_idx, last_anchor = anchors[-1]
@@ -1130,8 +1177,11 @@ class TimestampDetective:
             i for i in range(last_anchor_idx + 1, n)
             if result[i].get("detected_ts") is None
         ]
+        # Step forward at 10-second intervals from t_last. These commands ran
+        # after the last known anchor and before the user enabled EXTENDED_HISTORY,
+        # so we don't use 'now' as a right bound (semantically wrong).
         for offset, i in enumerate(suffix_unresolved):
-            result[i]["detected_ts"] = t_last + offset + 1
+            result[i]["detected_ts"] = t_last + (offset + 1) * 10
             result[i]["detected_source"] = f"Post-anchor step-forward (after {src_last})"
             result[i]["is_legacy_still"] = True
 
