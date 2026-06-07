@@ -48,5 +48,11 @@ Enabling history timestamps in shell config files (via `setopt EXTENDED_HISTORY`
 - **Dynamic Commit Ingestion Timeframe & Configurable Timeout**:
   - Updated the git commit ingestion window in `cli.py` to dynamically adjust `since_ts` back to the oldest parsed command's timestamp (minus a 1-day buffer) if older commands exist. This ensures that recovered legacy commands get correct commit linkages.
   - Added support for a configurable `timeout` parameter inside `get_project_commits()` in `git_integration.py`. If deep history ingestion (older than 90 days) is active, a longer 30-second timeout is assigned to prevent subprocess timeouts in large repositories, keeping the common 90-day fast path capped at 10 seconds.
+- **Copilot PR Review Improvements (HTTPError Body extraction & Lazy project_paths scan)**:
+  - Updated HTTPError extraction to handle empty response bodies gracefully by falling back to `e.reason`.
+  - Normalized all spaces and newlines (via `" ".join(str.split())`) on surfaced HTTPError messages to match generic exception format paths and prevent bad formatting in UI toasts.
+  - Refactored project repository scanning (`discover_project_paths`) in `cli.py` to run lazily. Discovered paths are passed as a callable which is only executed inside the Zsh history parser when legacy commands are actually encountered, preventing startup/search slowdowns for fully timestamped histories.
+  - Added unit test `test_parse_all_histories_project_paths_propagation_callable` in `tests/test_parser.py` and `test_http_error_empty_body_fallback_to_reason`/`test_http_error_whitespace_normalization` in `tests/test_ai_error_surfacing.py`.
 
 ---
+
