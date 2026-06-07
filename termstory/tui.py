@@ -2009,7 +2009,10 @@ class TermStoryWorkspace(App):
             self.call_from_thread(self.update_session_ui, session.id, summary)
             self.call_from_thread(self.notify, "Story generated successfully!")
         else:
-            self.call_from_thread(self.notify, "Failed to generate story. Check AI config or logs.", severity="error")
+            from termstory.ai import get_last_ai_error
+            err = get_last_ai_error()
+            err_msg = f"Failed to generate story: {err}" if err else "Failed to generate story. Check AI config or logs."
+            self.call_from_thread(self.notify, err_msg, severity="error")
             self.call_from_thread(self.refresh_details_canvas)
 
     @work(exclusive=True)
@@ -2098,7 +2101,10 @@ class TermStoryWorkspace(App):
             self.db.save_macro_summary(timeframe_id, timeframe_type, summary)
             self.call_from_thread(self.notify, "Summary generated successfully!")
         else:
-            self.call_from_thread(self.notify, "Failed to generate summary. Check AI config or logs.", severity="error")
+            from termstory.ai import get_last_ai_error
+            err = get_last_ai_error()
+            err_msg = f"Failed to generate summary: {err}" if err else "Failed to generate summary. Check AI config or logs."
+            self.call_from_thread(self.notify, err_msg, severity="error")
             
         self.call_from_thread(self.refresh_details_canvas)
 
@@ -2341,6 +2347,11 @@ class TermStoryWorkspace(App):
                 self.call_from_thread(self.set_timer, 15.0, clear_recent_bulk)
                 
                 self.call_from_thread(self.update_session_ui, session.id, summary, True)
+            else:
+                from termstory.ai import get_last_ai_error
+                err = get_last_ai_error()
+                err_msg = f"Failed to generate story for session {session.id}: {err}" if err else f"Failed to generate story for session {session.id}."
+                self.call_from_thread(self.notify, err_msg, severity="error")
                 
             self.bulk_running_timeframes[timeframe_id] = (idx + 1, total)
             

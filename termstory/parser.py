@@ -13,7 +13,11 @@ def clean_command(cmd_str: str) -> Optional[str]:
         return None
     return cleaned
 
-def parse_zsh_history(filepath: str, existing_lookup: Optional[Dict[str, List[int]]] = None) -> List[Command]:
+def parse_zsh_history(
+    filepath: str,
+    existing_lookup: Optional[Dict[str, List[int]]] = None,
+    project_paths: Optional[List[str]] = None
+) -> List[Command]:
     """Parse a Zsh history file containing ': <timestamp>:<duration>;<command>' format.
     Handles legacy command lines, timestamped command lines, and multiline command continuations
     gracefully in Zsh extended history mode, Legacy Fallback Mode, and Hybrid/Mixed history mode.
@@ -186,7 +190,7 @@ def parse_zsh_history(filepath: str, existing_lookup: Optional[Dict[str, List[in
     if legacy_items:
         detective = TimestampDetective(
             search_root=os.path.expanduser("~"),
-            project_paths=[]  # populated from cli.py via parse_all_histories when available
+            project_paths=project_paths or []
         )
         enriched_legacy = detective.resolve_all(legacy_items)
     else:
@@ -269,7 +273,11 @@ def parse_zsh_history(filepath: str, existing_lookup: Optional[Dict[str, List[in
     filtered_commands.sort(key=lambda x: x.timestamp)
     return filtered_commands
 
-def parse_bash_history(filepath: str, existing_lookup: Optional[Dict[str, List[int]]] = None) -> List[Command]:
+def parse_bash_history(
+    filepath: str,
+    existing_lookup: Optional[Dict[str, List[int]]] = None,
+    project_paths: Optional[List[str]] = None
+) -> List[Command]:
     """Parse Bash history. Reads standard commands, using #<timestamp> lines if present, 
     otherwise falls back to spacing command timestamps backward from file modification time.
     """
@@ -415,7 +423,11 @@ def parse_bash_history(filepath: str, existing_lookup: Optional[Dict[str, List[i
     filtered_commands.sort(key=lambda x: x.timestamp)
     return filtered_commands
 
-def parse_all_histories(filepaths: List[str], db: Optional[Any] = None) -> List[Command]:
+def parse_all_histories(
+    filepaths: List[str],
+    db: Optional[Any] = None,
+    project_paths: Optional[List[str]] = None
+) -> List[Command]:
     """Parse all listed history files, merge and deduplicate them, and sort by timestamp"""
     existing_lookup = None
     if db is not None:
@@ -428,12 +440,12 @@ def parse_all_histories(filepaths: List[str], db: Optional[Any] = None) -> List[
     for path in filepaths:
         filename = os.path.basename(path).lower()
         if "zsh" in filename:
-            all_commands.extend(parse_zsh_history(path, existing_lookup))
+            all_commands.extend(parse_zsh_history(path, existing_lookup, project_paths=project_paths))
         elif "bash" in filename:
-            all_commands.extend(parse_bash_history(path, existing_lookup))
+            all_commands.extend(parse_bash_history(path, existing_lookup, project_paths=project_paths))
         else:
             # Fallback to bash parser for unknown file types
-            all_commands.extend(parse_bash_history(path, existing_lookup))
+            all_commands.extend(parse_bash_history(path, existing_lookup, project_paths=project_paths))
             
     # Deduplicate by (timestamp, command text)
     seen = set()

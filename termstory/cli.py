@@ -68,7 +68,19 @@ def run_ingestion(db: Database) -> None:
         )
         return
         
-    commands = parse_all_histories(history_files, db=db)
+    import glob
+    project_paths = []
+    for root_dir in ["~/Projects", "~/src", "~/Developer", "~/Code", "~/Work", "~"]:
+        expanded = os.path.expanduser(root_dir)
+        if os.path.isdir(expanded):
+            for git_dir in glob.glob(os.path.join(expanded, "*", ".git")):
+                project_paths.append(os.path.dirname(git_dir))
+            if root_dir != "~":
+                for git_dir in glob.glob(os.path.join(expanded, "*", "*", ".git")):
+                    project_paths.append(os.path.dirname(git_dir))
+    project_paths = list(set(project_paths))
+
+    commands = parse_all_histories(history_files, db=db, project_paths=project_paths)
     if len(commands) == 0:
         Console(stderr=True).print(
             "\n[bold yellow]⚠️  Warning: Shell history parser returned 0 commands.[/bold yellow]\n"
@@ -80,9 +92,14 @@ def run_ingestion(db: Database) -> None:
     projects = detect_projects(sessions)
     db.save_data(projects, sessions, commands)
     
-    # Ingest commits from last 90 days for each project
+    # Ingest commits for each project: dynamically adjust search window based on the oldest command parsed
     from termstory.git_integration import get_project_commits
-    since_ts = int(get_current_time().timestamp()) - 90 * 24 * 3600
+    if commands:
+        oldest_ts = commands[0].timestamp
+        since_ts = min(oldest_ts - 24 * 3600, int(get_current_time().timestamp()) - 90 * 24 * 3600)
+    else:
+        since_ts = int(get_current_time().timestamp()) - 90 * 24 * 3600
+        
     for p in projects:
         if p.id is not None and p.path:
             commits = get_project_commits(p.path, since_ts)
@@ -216,6 +233,20 @@ def show_ui(
     
     if getattr(app_tui, "was_reset", False):
         perform_reset()
+    else:
+        try:
+            from termstory.config import load_config, save_config
+            _cfg = load_config()
+            if not _cfg.get("has_seen_onboarding_reminder", False) and _cfg.get("active_provider", "disabled") == "disabled":
+                console.print("\n[bold yellow]💡 Hint: TermStory works best with AI summaries enabled![/bold yellow]")
+                console.print("To configure a local or cloud AI provider (Groq, OpenAI, Ollama), run:")
+                console.print("  [cyan]termstory config set active_provider groq[/cyan] (or [cyan]openai[/cyan] / [cyan]ollama[/cyan])")
+                console.print("  [cyan]termstory config set providers.groq.api_key <your_api_key>[/cyan]")
+                console.print("Alternatively, press [bold]? [/bold]inside the TUI to open the onboarding settings anytime.\n")
+                _cfg["has_seen_onboarding_reminder"] = True
+                save_config(_cfg)
+        except Exception:
+            pass
 
 @app.command("reset")
 def reset_cmd():

@@ -15,8 +15,35 @@ Enabling history timestamps in shell config files (via `setopt EXTENDED_HISTORY`
 - Updated `show_ui()` in `cli.py` to check that the `has_seen_timestamp_prompt` config flag is `False` before triggering the timekeeping prompt.
 - Handled default response parsing: pressing Enter (empty response `""`) now defaults to `"y"` to match the `[Y/n]` prompt style.
 - Restrict flag persistence: only save `has_seen_timestamp_prompt = True` on valid, explicit responses (`y`/`yes`/`n`/`no`/KeyboardInterrupt/EOF). In the `"yes"` branch, the flag is saved *only after* the shell config file append operation succeeds. This prevents the prompt from being suppressed if the write fails (e.g. read-only filesystem or permission error).
-- Avoid unconditional configuration loading: deferred `load_config()` on the typical `termstory ui` run. Now it checks the environment variable `TERMSTORY_MISSING_TIMESTAMPS` first, and only loads the configuration from disk if history timestamps are indeed missing.
+- Defer configuration loading to minimize disk I/O on typical startup runs: check if the environment variable `TERMSTORY_MISSING_TIMESTAMPS` is `"1"` first before importing/calling `load_config()`.
 - Updated CLI tests in `test_cli_commands.py` to mock `get_config_path` and assert that the prompt saves the flag. Added a regression test calling the CLI twice sequentially to ensure the prompt is successfully suppressed on the second run.
 
 ---
 
+## 2. Fix AI Error Surfacing and Timestamp Detective Wiring
+
+### Problems
+1. **AI Silent Failures**: When the configured LLM API failed (due to incorrect API key, network timeout, rate limiting, or connection error), `_send_llm_request()` caught all exceptions and silently returned `None`. The TUI and CLI did not show any error or indication, leaving the user with blank sessions and no diagnostic information.
+2. **Missing Project Paths in Detective**: The `TimestampDetective` was always initialized with `project_paths = []`, preventing it from locating local Git repositories to correlate commits for older legacy commands.
+3. **Capped Git Ingestion Window**: Git commit ingestion was hardcoded to 90 days, which meant recovered sessions older than 90 days did not receive their corresponding commits even if resolved successfully by the Timestamp Detective.
+4. **AI Disabled Notification**: When installed fresh, the default AI provider is `"disabled"`, and there was no post-onboarding indication to show how to configure/enable it.
+
+### Fixes
+- **Detailed AI Error Tracking**:
+  - Implemented module-level error tracking in `termstory/ai.py` using `_last_ai_error` and helper functions `get_last_ai_error()` / `clear_last_ai_error()`.
+  - Updated `_send_llm_request` to clear errors on start and capture exceptions in `_last_ai_error`.
+  - Added specialized handling for `urllib.error.HTTPError` to decode and extract error messages directly from JSON response bodies returned by the LLM providers (e.g., Groq's or OpenAI's API error payloads).
+  - Updated `termstory/tui.py`'s single, bulk, and timeframe generation error paths to surface these captured error messages inside notification toasts.
+  - Added unit tests in `tests/test_ai_error_surfacing.py` verifying correct error capture, clearing, and HTTP JSON parsing.
+- **Interactive AI Onboarding Reminder**:
+  - Added a one-time reminder printed to the console when exiting the TUI, gated by `has_seen_onboarding_reminder` flag, showing exactly how to configure the AI provider and set the API key.
+  - Registered `"has_seen_onboarding_reminder": False` in config defaults.
+  - Added a unit test verifying one-time reminder printing and subsequent suppression.
+- **Git Repository Discovery**:
+  - Implemented automatic git project path scanning in `cli.py:run_ingestion()`. Scans up to 2 levels deep in `["~/Projects", "~/src", "~/Developer", "~/Code", "~/Work"]` and 1 level deep in `["~"]` using `glob` to find `.git` folders.
+  - Propagated discovered `project_paths` through `parse_all_histories` to `parse_zsh_history`, which passes them to the `TimestampDetective`.
+  - Added unit test in `tests/test_parser.py` validating that the project paths parameter is correctly propagated.
+- **Dynamic Commit Ingestion Timeframe**:
+  - Updated the git commit ingestion window in `cli.py` to dynamically adjust `since_ts` back to the oldest parsed command's timestamp (minus a 1-day buffer) if older commands exist. This ensures that recovered legacy commands get correct commit linkages.
+
+---

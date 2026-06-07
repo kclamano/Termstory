@@ -145,3 +145,24 @@ def test_parse_zsh_history_locking(tmp_path):
     
     assert commands[1].command == "git commit"
     assert commands[1].timestamp == 1748851200
+
+def test_parse_all_histories_project_paths_propagation(monkeypatch, tmp_path):
+    temp_file = tmp_path / "zsh_test_history"
+    temp_file.write_text("git status\n")
+    
+    received_project_paths = []
+    
+    class MockTimestampDetective:
+        def __init__(self, search_root, project_paths):
+            nonlocal received_project_paths
+            received_project_paths.extend(project_paths)
+            
+        def resolve_all(self, items):
+            return [{"command": "git status", "is_legacy_still": True, "detected_ts": 1748851220, "detected_source": "Mock"}]
+            
+    monkeypatch.setattr("termstory.parser.TimestampDetective", MockTimestampDetective)
+    
+    parse_all_histories([str(temp_file)], project_paths=["/path/to/project-a", "/path/to/project-b"])
+    
+    assert "/path/to/project-a" in received_project_paths
+    assert "/path/to/project-b" in received_project_paths

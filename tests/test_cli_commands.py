@@ -269,3 +269,35 @@ def test_run_ingestion_empty_history_file(tmp_path, monkeypatch, capsys):
     assert "exists but is empty" in err
 
 
+def test_cli_ui_onboarding_reminder_printed(tmp_path, monkeypatch):
+    db_file = tmp_path / "test_cli_ui.db"
+    monkeypatch.setattr("termstory.cli.get_db_path", lambda: str(db_file))
+    monkeypatch.setattr("termstory.config.get_db_path", lambda: str(db_file))
+    config_file = tmp_path / "config.json"
+    monkeypatch.setattr("termstory.config.get_config_path", lambda: str(config_file))
+    
+    # Mock run_ingestion
+    monkeypatch.setattr("termstory.cli.run_ingestion", lambda db: None)
+    
+    # Mock TermStoryWorkspace.run to do nothing
+    monkeypatch.setattr("termstory.tui.TermStoryWorkspace.run", lambda self: None)
+    
+    runner = CliRunner()
+    result = runner.invoke(app, ["ui"])
+    assert result.exit_code == 0
+    assert "Hint: TermStory works best with AI summaries enabled!" in result.stdout
+    
+    # Verify config flag was saved
+    import json
+    assert config_file.exists()
+    with open(config_file, "r") as f:
+        cfg = json.load(f)
+    assert cfg.get("has_seen_onboarding_reminder") is True
+    
+    # Second run should not print the reminder
+    result2 = runner.invoke(app, ["ui"])
+    assert result2.exit_code == 0
+    assert "Hint: TermStory works best with AI summaries enabled!" not in result2.stdout
+
+
+
