@@ -393,8 +393,9 @@ class OnboardingScreen(ModalScreen[dict]):
             Vertical(
                 Static("GitHub ID / Username (for ASCII avatar):", classes="input-label"),
                 Input(value=github_username, placeholder="GitHub Username...", id="input-github-username"),
-                Static("API Key (leave blank for local providers):", classes="input-label", id="label-api-key"),
+                Static("API Key (required for cloud providers):", classes="input-label", id="label-api-key"),
                 Input(value=api_key, placeholder="API Key...", password=True, id="input-api-key"),
+                Static("", id="error-api-key", classes="error-label"),
                 Static("API Base URL:", classes="input-label"),
                 Input(value=base_url, placeholder="API Base URL...", id="input-base-url"),
                 Static("Model Name:", classes="input-label"),
@@ -432,12 +433,18 @@ class OnboardingScreen(ModalScreen[dict]):
         model_name_input.value = provider_config.get("model_name", "")
         
         api_key_label = self.query_one("#label-api-key")
+        error_api_key = self.query_one("#error-api-key")
+        error_api_key.styles.color = "red"
+        
         if provider == "ollama":
             api_key_input.styles.display = "none"
             api_key_label.styles.display = "none"
+            error_api_key.styles.display = "none"
         else:
             api_key_input.styles.display = "block"
             api_key_label.styles.display = "block"
+            error_api_key.update("")
+            error_api_key.styles.display = "none"
             
     def action_choose_groq(self) -> None:
         self.update_provider_ui("groq")
@@ -487,6 +494,14 @@ class OnboardingScreen(ModalScreen[dict]):
             base_url = self.query_one("#input-base-url").value.strip()
             model_name = self.query_one("#input-model-name").value.strip()
             github_username = self.query_one("#input-github-username").value.strip().lstrip('@')
+            
+            error_label = self.query_one("#error-api-key")
+            if self.selected_provider != "ollama" and not api_key:
+                error_label.update("API Key cannot be empty.")
+                error_label.styles.display = "block"
+                return
+            else:
+                error_label.styles.display = "none"
             
             if not base_url:
                 if self.selected_provider == "groq":

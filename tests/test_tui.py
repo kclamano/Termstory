@@ -335,7 +335,9 @@ async def test_tui_onboarding_mouse_click():
         app = TermStoryWorkspace(db, days_limit=30, config_override={"has_seen_onboarding": False})
         async with app.run_test(size=(120, 50)) as pilot:
             # Click the disable button on OnboardingScreen
-            await pilot.click("#btn-disable-ai")
+            button = app.screen.query_one("#btn-disable-ai")
+            button.press()
+            await pilot.pause()
             assert app.config["has_seen_onboarding"] is True
             assert app.config["ai_enabled"] is False
 
@@ -985,8 +987,42 @@ async def test_tui_deep_search_scope_escape():
             assert "Search Results:" not in str(new_timeline_root.label)
             assert "Timeline" in str(new_timeline_root.label)
 
-
-
-
-
-
+@pytest.mark.asyncio
+async def test_tui_api_key_validation():
+    from termstory.tui import OnboardingScreen
+    # Provide a config that defaults to groq with no api key
+    screen = OnboardingScreen({"active_provider": "groq", "providers": {}})
+    
+    # We need an app context to mount the screen
+    from textual.app import App
+    class DummyApp(App):
+        pass
+        
+    app = DummyApp()
+    async with app.run_test() as pilot:
+        # Push the screen
+        await app.push_screen(screen)
+        await pilot.pause()
+        
+        # Verify initial state of error label
+        error_label = screen.query_one("#error-api-key")
+        assert error_label.styles.display == "none"
+        
+        # Click save without entering an API key
+        await pilot.click("#btn-save")
+        await pilot.pause()
+        
+        # Verify error label becomes visible and block dismissal
+        assert error_label.styles.display == "block"
+        assert len(app.screen_stack) > 1  # Screen did not dismiss
+        
+        # Switch to ollama, which does not require an API key
+        await pilot.click("#btn-select-ollama")
+        await pilot.pause()
+        
+        # Click save again
+        await pilot.click("#btn-save")
+        await pilot.pause()
+        
+        # Should now dismiss successfully
+        assert len(app.screen_stack) == 1

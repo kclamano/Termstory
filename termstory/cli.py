@@ -142,6 +142,36 @@ def search_history(
     from rich.text import Text
     console.print(Text.from_ansi(output))
 
+def cleanup_shell_marker():
+    """Remove TermStory injection block and old injections from shell rc files"""
+    rc_files = ["~/.zshrc", "~/.bashrc", "~/.bash_profile"]
+    
+    block_pattern = re.compile(
+        r'\n?# >>> TermStory Shell History Timestamp Support >>>.*?'
+        r'# <<< TermStory Shell History Timestamp Support <<<\n?',
+        re.DOTALL
+    )
+    
+    old_block_pattern_zsh = re.compile(r'\n?# TermStory Timekeeping\nsetopt EXTENDED_HISTORY\n?')
+    old_block_pattern_bash = re.compile(r'\n?# TermStory Timekeeping\nexport HISTTIMEFORMAT="%F %T "\n?')
+    
+    for rc in rc_files:
+        path = os.path.expanduser(rc)
+        if os.path.exists(path):
+            try:
+                with open(path, "r") as f:
+                    content = f.read()
+                
+                new_content = block_pattern.sub('\n', content)
+                new_content = old_block_pattern_zsh.sub('\n', new_content)
+                new_content = old_block_pattern_bash.sub('\n', new_content)
+                
+                if new_content != content:
+                    with open(path, "w") as f:
+                        f.write(new_content.rstrip() + '\n')
+            except Exception:
+                pass
+
 def perform_reset():
     """Reset all TermStory state, configuration, and database files on disk"""
     import shutil
@@ -158,6 +188,8 @@ def perform_reset():
                         shutil.rmtree(file_path)
             except Exception:
                 pass
+                
+    cleanup_shell_marker()
     console.print("\n[bold green]✨ TermStory state, configuration, and database have been successfully reset![/]")
 
 @app.command("ui")
@@ -193,10 +225,10 @@ def show_ui(
                 config_path = os.path.expanduser("~/.bash_profile")
             else:
                 config_path = os.path.expanduser("~/.bashrc")
-            config_directive = '\n# TermStory Timekeeping\nexport HISTTIMEFORMAT="%F %T "\n'
+            config_directive = '\n# >>> TermStory Shell History Timestamp Support >>>\nexport HISTTIMEFORMAT="%F %T "\n# <<< TermStory Shell History Timestamp Support <<<\n'
         else:
             config_path = os.path.expanduser("~/.zshrc")
-            config_directive = "\n# TermStory Timekeeping\nsetopt EXTENDED_HISTORY\n"
+            config_directive = "\n# >>> TermStory Shell History Timestamp Support >>>\nsetopt EXTENDED_HISTORY\n# <<< TermStory Shell History Timestamp Support <<<\n"
         config_display = config_path.replace(os.path.expanduser("~"), "~", 1)
         
         console.print("\n[bold yellow]⚠️  TermStory needs your shell to record timestamps to build your timeline accurately.[/bold yellow]")
@@ -212,8 +244,17 @@ def show_ui(
             
         if response in ("y", "yes"):
             try:
-                with open(config_path, "a") as f:
-                    f.write(config_directive)
+                already_exists = False
+                if os.path.exists(config_path):
+                    with open(config_path, "r") as f:
+                        content = f.read()
+                    if (is_bash and "HISTTIMEFORMAT" in content) or (not is_bash and "EXTENDED_HISTORY" in content):
+                        already_exists = True
+
+                if not already_exists:
+                    with open(config_path, "a") as f:
+                        f.write(config_directive)
+                
                 _cfg["has_seen_timestamp_prompt"] = True
                 save_config(_cfg)
                 console.print(

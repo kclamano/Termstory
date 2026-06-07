@@ -329,6 +329,75 @@ def test_cli_ui_onboarding_reminder_suppressed_if_seen_onboarding(tmp_path, monk
     assert result.exit_code == 0
     assert "Hint: TermStory works best with AI summaries enabled!" not in result.stdout
 
+def test_cli_zshrc_idempotency(tmp_path, monkeypatch):
+    db_file = tmp_path / "test_cli_ui.db"
+    monkeypatch.setattr("termstory.cli.get_db_path", lambda: str(db_file))
+    monkeypatch.setattr("termstory.config.get_db_path", lambda: str(db_file))
+    config_file = tmp_path / "config.json"
+    monkeypatch.setattr("termstory.config.get_config_path", lambda: str(config_file))
+    
+    monkeypatch.setattr("termstory.cli.run_ingestion", lambda db: None)
+    monkeypatch.setenv("TERMSTORY_MISSING_TIMESTAMPS", "1")
+    monkeypatch.setenv("SHELL", "/bin/zsh")
+    
+    zshrc_file = tmp_path / ".zshrc"
+    # Pre-populate with existing content
+    zshrc_file.write_text("some custom config\n")
+    monkeypatch.setattr("os.path.expanduser", lambda p: str(zshrc_file) if p == "~/.zshrc" else p)
+    
+    runner = CliRunner()
+    
+    # First run
+    result1 = runner.invoke(app, ["ui"], input="y\n")
+    assert result1.exit_code == 0
+    assert "Done! Please restart your terminal" in result1.stdout
+    
+    content1 = zshrc_file.read_text()
+    assert content1.count("setopt EXTENDED_HISTORY") == 1
+    
+    # Reset config flag manually to simulate a user resetting their termstory data
+    import json
+    with open(config_file, "w") as f:
+        json.dump({"has_seen_timestamp_prompt": False}, f)
+        
+    # Second run
+    result2 = runner.invoke(app, ["ui"], input="y\n")
+    assert result2.exit_code == 0
+    
+    content2 = zshrc_file.read_text()
+    # Should still only be 1
+    assert content2.count("setopt EXTENDED_HISTORY") == 1
 
 
-
+def test_cli_reset_cleanup_rc_files(tmp_path, monkeypatch):
+    import os
+    zshrc_file = tmp_path / ".zshrc"
+    bashrc_file = tmp_path / ".bashrc"
+    
+    monkeypatch.setattr("os.path.expanduser", lambda p: str(tmp_path / os.path.basename(p)))
+    
+    # Inject marker into fake zshrc
+    original_zshrc_content = "alias ll='ls -al'\n\n# >>> TermStory Shell History Timestamp Support >>>\nsetopt EXTENDED_HISTORY\n# <<< TermStory Shell History Timestamp Support <<<\n\nexport PATH=/usr/bin:$PATH\n"
+    zshrc_file.write_text(original_zshrc_content)
+    
+    # Inject old marker into fake bashrc
+    original_bashrc_content = "alias l='ls'\n\n# TermStory Timekeeping\nexport HISTTIMEFORMAT=\"%F %T \"\n\nalias foo=bar\n"
+    bashrc_file.write_text(original_bashrc_content)
+    
+    runner = CliRunner()
+    result = runner.invoke(app, ["reset"])
+    assert result.exit_code == 0
+    
+    # Check zshrc
+    new_zshrc = zshrc_file.read_text()
+    assert "# >>> TermStory" not in new_zshrc
+    assert "setopt EXTENDED_HISTORY" not in new_zshrc
+    assert "alias ll='ls -al'" in new_zshrc
+    assert "export PATH=/usr/bin:$PATH" in new_zshrc
+    
+    # Check bashrc
+    new_bashrc = bashrc_file.read_text()
+    assert "# TermStory Timekeeping" not in new_bashrc
+    assert "HISTTIMEFORMAT" not in new_bashrc
+    assert "alias l='ls'" in new_bashrc
+    assert "alias foo=bar" in new_bashrc
