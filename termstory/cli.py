@@ -180,6 +180,8 @@ def show_ui(
             response = input(
                 "Would you like TermStory to automatically enable history timestamps in your shell config file (`~/.zshrc` or `~/.bashrc`)? [Y/n] "
             ).strip().lower()
+            if response == "":
+                response = "y"
         except (KeyboardInterrupt, EOFError):
             console.print()
             response = "n"
@@ -198,10 +200,12 @@ def show_ui(
             except Exception as e:
                 console.print(f"[bold red]Error modifying {config_display}: {e}[/bold red]")
                 console.print("Continuing with legacy history fallback...")
-        else:
+        elif response in ("n", "no"):
             _cfg["has_seen_timestamp_prompt"] = True
             save_config(_cfg)
             console.print("Continuing with legacy history fallback...")
+        else:
+            console.print("Invalid response. Continuing with legacy history fallback...")
             
     from termstory.tui import TermStoryWorkspace
     app_tui = TermStoryWorkspace(db, days_limit=None if all_history else days)

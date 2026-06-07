@@ -196,6 +196,12 @@ def test_cli_ui_onboarding_missing_timestamps_no(tmp_path, monkeypatch):
         cfg = json.load(f)
     assert cfg.get("has_seen_timestamp_prompt") is True
 
+    # Second run should not re-prompt once flag is set
+    result2 = runner.invoke(app, ["ui"])
+    assert result2.exit_code == 0
+    assert "automatically enable history timestamps" not in result2.stdout
+    assert len(workspace_runs) == 2
+
 
 def test_cli_ui_onboarding_bash_shell(tmp_path, monkeypatch):
     """On a bash shell, onboarding should write HISTTIMEFORMAT to ~/.bashrc."""
