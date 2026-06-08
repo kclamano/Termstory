@@ -9,8 +9,9 @@ from termstory.parser import parse_all_histories
 from termstory.session import create_sessions
 from termstory.project import detect_projects
 from termstory.database import Database
-from termstory.date_utils import get_current_time
-from termstory.formatter import format_search_results
+from termstory.date_utils import get_current_time, get_today_range
+from termstory.formatter import format_search_results, format_today_output, format_project_output, format_insights_output
+import sqlite3
 
 from rich.console import Console
 from rich.table import Table
@@ -20,6 +21,19 @@ import re
 
 # Initialize rich console
 console = Console()
+
+def safe_init_db(db: Database) -> None:
+    try:
+        db.init_db()
+    except sqlite3.DatabaseError as e:
+        if "malformed" in str(e).lower():
+            Console(stderr=True).print(
+                "\n[bold red]Database Corrupted[/bold red]\n"
+                "Your TermStory database is corrupted. Please run `termstory reset` to fix it."
+            )
+            sys.exit(1)
+        else:
+            raise
 
 def intercept_sys_argv():
     """Intercept positional date arguments (e.g. termstory 2026-06-02) and rewrite them
@@ -121,7 +135,7 @@ def search_history(
     """Search across your work history (commits, commands, and projects)"""
     db_path = get_db_path()
     db = Database(db_path)
-    db.init_db()
+    safe_init_db(db)
     
     run_ingestion(db)
     
@@ -139,6 +153,76 @@ def search_history(
     results = results[:limit]
     
     output = format_search_results(query, results, detailed=detailed)
+    from rich.text import Text
+    console.print(Text.from_ansi(output))
+
+@app.command("today")
+def show_today(
+    compare: bool = typer.Option(True, "--compare/--no-compare", help="Compare with yesterday's metrics")
+):
+    """Show today's work summary"""
+    db_path = get_db_path()
+    db = Database(db_path)
+    safe_init_db(db)
+    
+    run_ingestion(db)
+    
+    sessions = db.get_today_sessions()
+    projects = db.get_all_projects_with_stats()
+    
+    compare_sessions = None
+    if compare:
+        start_ts, end_ts = get_today_range()
+        yesterday_start = start_ts - 24 * 3600
+        yesterday_end = end_ts - 24 * 3600
+        compare_sessions = db.get_range_sessions(yesterday_start, yesterday_end)
+        
+    output = format_today_output(sessions, projects, compare_sessions=compare_sessions)
+    from rich.text import Text
+    console.print(Text.from_ansi(output))
+
+@app.command("project")
+def show_project(
+    name: str = typer.Argument(..., help="Name or path of the project")
+):
+    """Show detailed history for a specific project"""
+    db_path = get_db_path()
+    db = Database(db_path)
+    safe_init_db(db)
+    
+    run_ingestion(db)
+    
+    projects = db.get_all_projects_with_stats()
+    
+    target = None
+    for p in projects:
+        if name.lower() in p.name.lower() or (p.path and name.lower() in p.path.lower()):
+            target = p
+            break
+            
+    if not target:
+        Console(stderr=True).print(f"[bold red]Error: Could not find project matching '{name}'[/]")
+        raise typer.Exit(code=1)
+        
+    sessions = db.get_project_sessions(target.id, start_ts=0)
+    
+    output = format_project_output(sessions, target)
+    from rich.text import Text
+    console.print(Text.from_ansi(output))
+
+@app.command("insights")
+def show_insights(
+    days: int = typer.Option(30, "--days", help="Number of days to analyze")
+):
+    """Show executive highlights and work patterns"""
+    db_path = get_db_path()
+    db = Database(db_path)
+    safe_init_db(db)
+    
+    run_ingestion(db)
+    
+    insights = {"days": days}
+    output = format_insights_output(insights)
     from rich.text import Text
     console.print(Text.from_ansi(output))
 
@@ -200,7 +284,7 @@ def show_ui(
     """Launch the interactive terminal dashboard user interface"""
     db_path = get_db_path()
     db = Database(db_path)
-    db.init_db()
+    safe_init_db(db)
     
     run_ingestion(db)
     
@@ -309,6 +393,16 @@ def reset_cmd():
     perform_reset()
 
 
+@app.command("optimize")
+def optimize_cmd():
+    """Run VACUUM on the database to defragment it and reclaim disk space"""
+    db_path = get_db_path()
+    db = Database(db_path)
+    safe_init_db(db)
+    
+    console.print("Running database optimization (VACUUM)...")
+    db.optimize()
+    console.print("[bold green]✅ Database optimized successfully![/]")
 
 
 # ==========================================
@@ -339,10 +433,14 @@ def config_set(key: str, value: str):
     else:
         if key in ("ai_enabled", "has_seen_onboarding") or key.endswith(".ai_enabled") or key.endswith(".has_seen_onboarding"):
             converted_value = value.lower() in ("true", "1", "yes")
+        elif "api_key" in key or "token" in key or "password" in key:
+            converted_value = value
         else:
             try:
                 if "." in value:
                     converted_value = float(value)
+                elif value.isdigit() and value.startswith("0") and len(value) > 1:
+                    converted_value = value
                 else:
                     converted_value = int(value)
             except ValueError:

@@ -9,7 +9,7 @@ class Database:
         
     def get_connection(self) -> sqlite3.Connection:
         """Create and return a database connection with foreign key support enabled"""
-        conn = sqlite3.connect(self.db_path)
+        conn = sqlite3.connect(self.db_path, timeout=30.0)
         conn.execute("PRAGMA foreign_keys = ON;")
         return conn
         
@@ -24,8 +24,8 @@ class Database:
         cursor.execute("""
         CREATE TABLE IF NOT EXISTS projects (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL UNIQUE,
-            path TEXT,
+            name TEXT NOT NULL,
+            path TEXT UNIQUE,
             first_seen INTEGER,
             last_seen INTEGER,
             created_at INTEGER DEFAULT (strftime('%s', 'now'))
@@ -84,16 +84,18 @@ class Database:
         # Add ai_summary column to sessions if not exists
         try:
             cursor.execute("ALTER TABLE sessions ADD COLUMN ai_summary TEXT;")
-        except sqlite3.OperationalError:
-            pass
+        except sqlite3.OperationalError as e:
+            if "duplicate column name" not in str(e).lower():
+                raise
 
         # v0.2.9: Add recovery_source column to commands so the Timestamp Detective's
         # Chain of Custody attribution survives the DB round-trip and appears in the TUI.
         # NULL for all commands with real EXTENDED_HISTORY timestamps.
         try:
             cursor.execute("ALTER TABLE commands ADD COLUMN recovery_source TEXT;")
-        except sqlite3.OperationalError:
-            pass  # Column already exists — safe to ignore
+        except sqlite3.OperationalError as e:
+            if "duplicate column name" not in str(e).lower():
+                raise
             
         # Create macro_summaries table if not exists
         cursor.execute("""
@@ -106,11 +108,56 @@ class Database:
         );
         """)
         
+        # One-time migration: change projects unique constraint
+        self._migrate_projects_unique_path(cursor)
+        
         # One-time migration: clean up duplicate sessions/commands and create unique indexes
         self._migrate_deduplicate_sessions(cursor)
             
         conn.commit()
         conn.close()
+
+    def _migrate_projects_unique_path(self, cursor) -> None:
+        """One-time migration: change projects table to have UNIQUE on path instead of name"""
+        cursor.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='projects'")
+        create_sql = cursor.fetchone()
+        if create_sql and "name TEXT NOT NULL UNIQUE" in create_sql[0]:
+            # Must commit any pending transaction before changing PRAGMA foreign_keys
+            cursor.connection.commit()
+            cursor.execute("PRAGMA foreign_keys = OFF;")
+            
+            # First deduplicate projects by path before adding UNIQUE path constraint
+            cursor.execute("SELECT path, COUNT(*), MIN(id) FROM projects WHERE path IS NOT NULL GROUP BY path HAVING COUNT(*) > 1")
+            for row in cursor.fetchall():
+                path, count, min_id = row
+                # Reassign foreign keys to the kept project (min_id)
+                cursor.execute("SELECT id FROM projects WHERE path = ? AND id != ?", (path, min_id))
+                dup_ids = [r[0] for r in cursor.fetchall()]
+                for dup_id in dup_ids:
+                    cursor.execute("UPDATE sessions SET project_id = ? WHERE project_id = ?", (min_id, dup_id))
+                    cursor.execute("UPDATE commands SET project_id = ? WHERE project_id = ?", (min_id, dup_id))
+                    cursor.execute("UPDATE commits SET project_id = ? WHERE project_id = ?", (min_id, dup_id))
+                    cursor.execute("DELETE FROM projects WHERE id = ?", (dup_id,))
+            
+            cursor.execute("ALTER TABLE projects RENAME TO projects_old;")
+            cursor.execute("""
+            CREATE TABLE projects (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                path TEXT UNIQUE,
+                first_seen INTEGER,
+                last_seen INTEGER,
+                created_at INTEGER DEFAULT (strftime('%s', 'now'))
+            );
+            """)
+            cursor.execute("""
+            INSERT INTO projects (id, name, path, first_seen, last_seen, created_at)
+            SELECT id, name, path, first_seen, last_seen, created_at FROM projects_old;
+            """)
+            cursor.execute("DROP TABLE projects_old;")
+            
+            cursor.connection.commit()
+            cursor.execute("PRAGMA foreign_keys = ON;")
 
     def _migrate_deduplicate_sessions(self, cursor) -> None:
         """One-time migration: remove duplicate sessions and commands that share the same keys,
@@ -188,38 +235,38 @@ class Database:
             cursor = conn.cursor()
             
             # --- 1. Save Projects ---
-            # Capture the temporary python project IDs first (grouping by name)
-            name_to_old_ids = {}
+            # Capture the temporary python project IDs first (grouping by path)
+            path_to_old_ids = {}
             for p in projects:
                 if p.id is not None:
-                    if p.name not in name_to_old_ids:
-                        name_to_old_ids[p.name] = []
-                    name_to_old_ids[p.name].append(p.id)
+                    if p.path not in path_to_old_ids:
+                        path_to_old_ids[p.path] = []
+                    path_to_old_ids[p.path].append(p.id)
             
             cursor.execute("SELECT id, name, path, first_seen, last_seen FROM projects")
-            db_projects = {row[1]: {"id": row[0], "path": row[2], "first_seen": row[3], "last_seen": row[4]} for row in cursor.fetchall()}
+            db_projects = {row[2]: {"id": row[0], "name": row[1], "first_seen": row[3], "last_seen": row[4]} for row in cursor.fetchall()}
             
             project_id_map = {} # old_python_id -> db_id
             
             new_projects_to_insert = []
             projects_to_update = []
-            inserted_names = set()
+            inserted_paths = set()
             
             for project in projects:
-                if project.name in db_projects:
-                    db_p = db_projects[project.name]
+                if project.path in db_projects:
+                    db_p = db_projects[project.path]
                     db_id = db_p["id"]
                     project.id = db_id
                     
                     # Update first_seen/last_seen ranges if they expanded
                     new_first = min(db_p["first_seen"], project.first_seen)
                     new_last = max(db_p["last_seen"], project.last_seen)
-                    if new_first != db_p["first_seen"] or new_last != db_p["last_seen"] or project.path != db_p["path"]:
-                        projects_to_update.append((project.path, new_first, new_last, db_id))
+                    if new_first != db_p["first_seen"] or new_last != db_p["last_seen"] or project.name != db_p["name"]:
+                        projects_to_update.append((project.name, new_first, new_last, db_id))
                 else:
-                    if project.name not in inserted_names:
+                    if project.path not in inserted_paths:
                         new_projects_to_insert.append((project.name, project.path, project.first_seen, project.last_seen))
-                        inserted_names.add(project.name)
+                        inserted_paths.add(project.path)
                     
             if new_projects_to_insert:
                 cursor.executemany("""
@@ -229,20 +276,20 @@ class Database:
                 
             if projects_to_update:
                 cursor.executemany("""
-                    UPDATE projects SET path = ?, first_seen = ?, last_seen = ? WHERE id = ?
+                    UPDATE projects SET name = ?, first_seen = ?, last_seen = ? WHERE id = ?
                 """, projects_to_update)
                 
             # Re-read projects map to update project_id_map
-            cursor.execute("SELECT id, name FROM projects")
+            cursor.execute("SELECT id, path FROM projects")
             refreshed_projects = {row[1]: row[0] for row in cursor.fetchall()}
             
             for project in projects:
-                project.id = refreshed_projects[project.name]
+                project.id = refreshed_projects.get(project.path, project.id)
                 
             # Build the ID mapping: old_python_id -> db_id
-            for name, old_ids in name_to_old_ids.items():
-                if name in refreshed_projects:
-                    db_id = refreshed_projects[name]
+            for path, old_ids in path_to_old_ids.items():
+                if path in refreshed_projects:
+                    db_id = refreshed_projects[path]
                     for old_id in old_ids:
                         project_id_map[old_id] = db_id
                 
@@ -351,7 +398,7 @@ class Database:
 
             if new_commands_to_insert:
                 cursor.executemany("""
-                    INSERT INTO commands (timestamp, command, exit_code, session_id, project_id, recovery_source)
+                    INSERT OR IGNORE INTO commands (timestamp, command, exit_code, session_id, project_id, recovery_source)
                     VALUES (?, ?, ?, ?, ?, ?)
                 """, new_commands_to_insert)
 
@@ -995,3 +1042,11 @@ class Database:
         finally:
             conn.close()
         return results
+
+    def optimize(self) -> None:
+        """Run VACUUM on the database to defragment it and reclaim disk space."""
+        conn = self.get_connection()
+        try:
+            conn.execute("VACUUM;")
+        finally:
+            conn.close()

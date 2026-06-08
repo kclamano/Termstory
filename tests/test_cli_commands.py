@@ -97,6 +97,14 @@ def test_cli_config_commands(tmp_path, monkeypatch):
     assert "sk-pro...-123" in result.stdout
     assert "ai_enabled" in result.stdout
 
+    # 7. Test setting string with leading zeros (should not be truncated to int)
+    result = runner.invoke(app, ["config", "set", "groq_api_key", "00012345"])
+    assert result.exit_code == 0
+    result = runner.invoke(app, ["config", "get", "groq_api_key"])
+    assert result.exit_code == 0
+    assert "00012345" in result.stdout
+    assert "12345" not in result.stdout.replace("00012345", "")
+
 def test_cli_reset_commands(monkeypatch):
     called = []
     def mock_perform_reset():
@@ -402,3 +410,79 @@ def test_cli_reset_cleanup_rc_files(tmp_path, monkeypatch):
     assert "HISTTIMEFORMAT" not in new_bashrc
     assert "alias l='ls'" in new_bashrc
     assert "alias foo=bar" in new_bashrc
+
+def test_cli_error_states(tmp_path, monkeypatch):
+    db_file = tmp_path / "test_cli_errors.db"
+    monkeypatch.setattr("termstory.cli.get_db_path", lambda: str(db_file))
+    monkeypatch.setattr("termstory.config.get_db_path", lambda: str(db_file))
+    
+    runner = CliRunner()
+    
+    # 1. search with invalid --since date
+    result = runner.invoke(app, ["search", "query", "--since", "invalid-date"])
+    assert result.exit_code == 1
+    assert "Could not parse date" in result.stdout or "Could not parse date" in result.stderr
+    
+    # 2. project with unknown name
+    db = Database(str(db_file))
+    db.init_db()
+    result = runner.invoke(app, ["project", "non-existent-project-xyz"])
+    assert result.exit_code == 1
+    assert "Could not find project matching" in result.stdout or "Could not find project matching" in result.stderr
+    
+    # 3. config get with missing key
+    result = runner.invoke(app, ["config", "get", "some.missing.key"])
+    assert result.exit_code == 1
+    assert "Config key 'some.missing.key' not found" in result.stdout or "Config key 'some.missing.key' not found" in result.stderr
+    
+    # 4. global --date invalid format
+    result = runner.invoke(app, ["--date", "not-a-date"])
+    assert result.exit_code == 1
+    assert "Invalid date format" in result.stdout or "Invalid date format" in result.stderr
+
+def test_safe_init_db_corrupted(tmp_path, monkeypatch, capsys):
+    import sqlite3
+    db_file = tmp_path / "corrupt.db"
+    db_file.write_text("not a database")
+    
+    db = Database(str(db_file))
+    
+    # Override init_db to throw DatabaseError
+    def fake_init():
+        raise sqlite3.DatabaseError("database disk image is malformed")
+    monkeypatch.setattr(db, "init_db", fake_init)
+    
+    from termstory.cli import safe_init_db
+    import sys
+    
+    # Check that it calls sys.exit(1)
+    with monkeypatch.context() as m:
+        exited = []
+        m.setattr(sys, "exit", lambda c: exited.append(c))
+        safe_init_db(db)
+        
+        err = capsys.readouterr().err
+        assert "Database Corrupted" in err
+        assert len(exited) == 1
+        assert exited[0] == 1
+
+def test_cli_optimize_command(tmp_path, monkeypatch):
+    db_file = tmp_path / "test_cli_optimize.db"
+    monkeypatch.setattr("termstory.cli.get_db_path", lambda: str(db_file))
+    
+    db = Database(str(db_file))
+    db.init_db()
+    
+    # Mock Database.optimize to verify it's called
+    optimized = []
+    def mock_optimize(self):
+        optimized.append(True)
+        
+    monkeypatch.setattr(Database, "optimize", mock_optimize)
+    
+    runner = CliRunner()
+    result = runner.invoke(app, ["optimize"])
+    
+    assert result.exit_code == 0
+    assert "Database optimized successfully" in result.stdout
+    assert len(optimized) == 1
