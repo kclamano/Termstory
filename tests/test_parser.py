@@ -1,5 +1,5 @@
 import os
-from termstory.parser import parse_zsh_history, parse_bash_history, parse_all_histories, clean_command
+from termstory.parser import parse_zsh_history, parse_bash_history, parse_fish_history, parse_powershell_history, parse_all_histories, clean_command
 from termstory.models import Command
 
 def test_clean_command():
@@ -221,3 +221,31 @@ def test_parse_all_histories_project_paths_propagation_callable(monkeypatch, tmp
     assert callable_called is True
     assert "/path/to/project-c" in received_project_paths
 
+def test_parse_fish_history(tmp_path):
+    temp_file = tmp_path / "fish_history"
+    temp_file.write_text(
+        "- cmd: git status\n"
+        "  when: 1748851200\n"
+        "- cmd: echo \"hello \\n world\"\n"
+        "  when: 1748851210\n"
+    )
+    
+    commands = parse_fish_history(str(temp_file))
+    assert len(commands) == 2
+    assert commands[0].timestamp == 1748851200
+    assert commands[0].command == "git status"
+    assert commands[1].timestamp == 1748851210
+    assert commands[1].command == 'echo "hello world"'
+
+def test_parse_powershell_history(tmp_path):
+    temp_file = tmp_path / "consolehost_history.txt"
+    temp_file.write_text(
+        "git status\n"
+        "docker ps `\n"
+        "  -a\n"
+    )
+    
+    commands = parse_powershell_history(str(temp_file))
+    assert len(commands) == 2
+    assert commands[0].command == "git status"
+    assert commands[1].command == "docker ps ` -a"

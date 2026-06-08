@@ -7,10 +7,24 @@ from termstory.timestamp_detective import TimestampDetective
 
 def clean_command(cmd_str: str) -> Optional[str]:
     """Clean the command string: strip whitespace and join multiline commands with spaces"""
-    cleaned = re.sub(r'\\\s*\n', ' ', cmd_str)
+    # Strip ansi escape codes
+    ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+    cleaned = ansi_escape.sub('', cmd_str)
+    
+    cleaned = re.sub(r'\\\s*\n', ' ', cleaned)
     cleaned = " ".join(cleaned.split())
     if not cleaned:
         return None
+        
+    # Ignore known injected multiplexer hook commands
+    lower_cmd = cleaned.lower()
+    if "_zellij" in lower_cmd or "zellij setup" in lower_cmd:
+        return None
+    if "tmux set-environment" in lower_cmd or "tmux_pane" in lower_cmd:
+        return None
+    if "prompt_command" in lower_cmd or "__vte_prompt_command" in lower_cmd or "kitty +kitten" in lower_cmd:
+        return None
+        
     return cleaned
 
 def parse_zsh_history(
@@ -39,24 +53,20 @@ def parse_zsh_history(
 
     pattern = re.compile(r'^:\s*(\d+):(\d+);(.*)$')
     
-    # Find the index of the first line that matches the timestamped pattern
-    first_timestamped_idx = None
-    for idx, line in enumerate(raw_lines):
-        if pattern.match(line):
-            first_timestamped_idx = idx
-            break
-            
     parsed_items = []  # List[dict]: {"timestamp": Optional[int], "duration": Optional[int], "command": str}
     
     current_timestamp = None
     current_duration = None
     current_command_parts = []
     
+    in_timestamped_region = False
+    
     i = 0
     while i < len(raw_lines):
         line = raw_lines[i]
         match = pattern.match(line)
         if match:
+            in_timestamped_region = True
             # We found a timestamped line. First, save any pending command
             if current_command_parts:
                 cmd_str = "".join(current_command_parts)
@@ -81,55 +91,58 @@ def parse_zsh_history(
                 next_line = raw_lines[i]
                 if pattern.match(next_line):
                     break
+                    
+                lower_next = next_line.lower()
+                if "_zellij" in lower_next or "zellij setup" in lower_next or "tmux set-environment" in lower_next or "prompt_command" in lower_next or "__vte_prompt_command" in lower_next or "kitty +kitten" in lower_next:
+                    # Explicitly reset state on invalid multiplexer boundary
+                    current_command_parts = []
+                    i += 1
+                    break
+                    
                 # Strip trailing backslash and append
                 current_command_parts[-1] = current_command_parts[-1].rstrip()[:-1] + " "
                 current_command_parts.append(next_line)
                 i += 1
         else:
-            # Determine if this line should be treated as a legacy command or skipped/ignored
-            is_legacy = False
-            if first_timestamped_idx is None:
-                # 100% legacy file fallback: treat non-colon lines as legacy commands
-                if not line.startswith(':'):
-                    is_legacy = True
-            else:
-                # Hybrid/Mixed history file mode:
-                # Only treat lines BEFORE the first timestamped line as legacy commands
-                # and ignore colon-prefixed malformed lines, or lines after first timestamped.
-                if i < first_timestamped_idx and not line.startswith(':'):
-                    is_legacy = True
-            
-            if is_legacy:
-                # We found a legacy line. First, save any pending command
-                if current_command_parts:
-                    cmd_str = "".join(current_command_parts)
-                    cmd_cleaned = clean_command(cmd_str)
-                    if cmd_cleaned:
-                        parsed_items.append({
-                            "timestamp": current_timestamp,
-                            "duration": current_duration,
-                            "command": cmd_cleaned
-                        })
-                
-                # Start new legacy command (no timestamp/duration)
-                current_timestamp = None
-                current_duration = None
-                current_command_parts = [line]
+            if in_timestamped_region and not line.startswith('::'):
                 i += 1
+                continue
                 
-                # Consume multiline continuations
-                while i < len(raw_lines):
-                    if current_command_parts and not current_command_parts[-1].rstrip().endswith('\\'):
-                        break
-                    next_line = raw_lines[i]
-                    if pattern.match(next_line):
-                        break
-                    # Strip trailing backslash and append
-                    current_command_parts[-1] = current_command_parts[-1].rstrip()[:-1] + " "
-                    current_command_parts.append(next_line)
+            # We found a legacy line. First, save any pending command
+            if current_command_parts:
+                cmd_str = "".join(current_command_parts)
+                cmd_cleaned = clean_command(cmd_str)
+                if cmd_cleaned:
+                    parsed_items.append({
+                        "timestamp": current_timestamp,
+                        "duration": current_duration,
+                        "command": cmd_cleaned
+                    })
+            
+            # Start new legacy command (no timestamp/duration)
+            current_timestamp = None
+            current_duration = None
+            current_command_parts = [line]
+            i += 1
+            
+            # Consume multiline continuations for the legacy command
+            while i < len(raw_lines):
+                if current_command_parts and not current_command_parts[-1].rstrip().endswith('\\'):
+                    break
+                next_line = raw_lines[i]
+                if pattern.match(next_line):
+                    break
+                    
+                lower_next = next_line.lower()
+                if "_zellij" in lower_next or "zellij setup" in lower_next or "tmux set-environment" in lower_next or "prompt_command" in lower_next or "__vte_prompt_command" in lower_next or "kitty +kitten" in lower_next:
+                    # Explicitly reset state on invalid multiplexer boundary
+                    current_command_parts = []
                     i += 1
-            else:
-                # Skip this line (malformed or trailing garbage in timestamped mode)
+                    break
+                    
+                # Strip trailing backslash and append
+                current_command_parts[-1] = current_command_parts[-1].rstrip()[:-1] + " "
+                current_command_parts.append(next_line)
                 i += 1
 
     # Save last pending command
@@ -264,7 +277,8 @@ def parse_zsh_history(
     n_chunks = (n_unresolvable + CHUNK_SIZE - 1) // CHUNK_SIZE if n_unresolvable > 0 else 0
     window = max(n_chunks * 86400, 365 * 86400)
 
-    last_snapped_base_ts = 0
+    last_forward_base_ts = 0
+    last_backward_base_ts = 0
     current_snapped_base_ts = 0
 
     for idx, item in enumerate(unresolvable):
@@ -289,10 +303,25 @@ def parse_zsh_history(
 
             current_snapped_base_ts = int(dt.timestamp())
             
-            if current_snapped_base_ts <= last_snapped_base_ts:
-                current_snapped_base_ts = last_snapped_base_ts + 3600
+            if current_snapped_base_ts <= last_forward_base_ts:
+                current_snapped_base_ts = last_backward_base_ts - 3600
                 
-            last_snapped_base_ts = current_snapped_base_ts + (CHUNK_SIZE * 10)
+                dt_reclamp = datetime.fromtimestamp(current_snapped_base_ts)
+                if dt_reclamp.hour < 9:
+                    dt_reclamp -= timedelta(days=1)
+                    dt_reclamp = dt_reclamp.replace(hour=16, minute=0, second=0)
+                elif dt_reclamp.hour >= 18:
+                    dt_reclamp = dt_reclamp.replace(hour=16, minute=0, second=0)
+                    
+                if dt_reclamp.weekday() >= 5:
+                    dt_reclamp -= timedelta(days=(dt_reclamp.weekday() - 4))
+                    dt_reclamp = dt_reclamp.replace(hour=16, minute=0, second=0)
+                    
+                current_snapped_base_ts = int(dt_reclamp.timestamp())
+                last_backward_base_ts = current_snapped_base_ts
+            else:
+                last_forward_base_ts = current_snapped_base_ts + (CHUNK_SIZE * 10)
+                last_backward_base_ts = current_snapped_base_ts
 
         fallback_ts = current_snapped_base_ts + (intra_chunk_idx * 10)
         resolved_ts = resolve_timestamp(item["command"], fallback_ts)
@@ -371,11 +400,20 @@ def parse_bash_history(
             while i < len(raw_lines):
                 next_line = raw_lines[i]
                 next_line_stripped = next_line.strip()
-                if timestamp_pattern.match(next_line_stripped):
+                # If cmd_lines is empty, we are looking for the first line of the command.
+                # If it's a timestamp, it means consecutive timestamps, so we break and let the outer loop handle it.
+                if not cmd_lines and timestamp_pattern.match(next_line_stripped):
                     break
+                    
+                lower_next = next_line.lower()
+                if "_zellij" in lower_next or "zellij setup" in lower_next or "tmux set-environment" in lower_next or "prompt_command" in lower_next or "__vte_prompt_command" in lower_next or "kitty +kitten" in lower_next:
+                    cmd_lines = []
+                    i += 1
+                    break
+                    
                 cmd_lines.append(next_line)
                 i += 1
-                if cmd_lines and not cmd_lines[-1].rstrip().endswith('\\'):
+                if not cmd_lines[-1].rstrip().endswith('\\'):
                     break
                     
             cmd_str = "".join(cmd_lines)
@@ -387,12 +425,16 @@ def parse_bash_history(
             cmd_lines = [line]
             i += 1
             while i < len(raw_lines):
-                if cmd_lines and not cmd_lines[-1].rstrip().endswith('\\'):
+                if not cmd_lines[-1].rstrip().endswith('\\'):
                     break
                 next_line = raw_lines[i]
-                next_line_stripped = next_line.strip()
-                if timestamp_pattern.match(next_line_stripped):
+                
+                lower_next = next_line.lower()
+                if "_zellij" in lower_next or "zellij setup" in lower_next or "tmux set-environment" in lower_next or "prompt_command" in lower_next or "__vte_prompt_command" in lower_next or "kitty +kitten" in lower_next:
+                    cmd_lines = []
+                    i += 1
                     break
+                    
                 cmd_lines.append(next_line)
                 i += 1
                 
@@ -401,7 +443,13 @@ def parse_bash_history(
             if cmd_cleaned:
                 temp_commands.append((None, cmd_cleaned))
                 
-    # Assign timestamps if missing
+    return _assign_missing_timestamps_fallback(temp_commands, mtime, existing_lookup)
+
+def _assign_missing_timestamps_fallback(
+    temp_commands: List[tuple],
+    mtime: int,
+    existing_lookup: Optional[Dict[str, List[int]]]
+) -> List[Command]:
     commands_to_return = []
     has_any_timestamps = any(t is not None for t, _ in temp_commands)
     
@@ -424,7 +472,8 @@ def parse_bash_history(
         BUFFER_30_DAYS = 30 * 86400
         start_time = mtime - BUFFER_30_DAYS - window
         
-        last_snapped_base_ts = 0
+        last_forward_base_ts = 0
+        last_backward_base_ts = 0
         current_snapped_base_ts = 0
         
         for idx, (t, cmd) in enumerate(temp_commands):
@@ -449,10 +498,25 @@ def parse_bash_history(
 
                 current_snapped_base_ts = int(dt.timestamp())
                 
-                if current_snapped_base_ts <= last_snapped_base_ts:
-                    current_snapped_base_ts = last_snapped_base_ts + 3600
+                if current_snapped_base_ts <= last_forward_base_ts:
+                    current_snapped_base_ts = last_backward_base_ts - 3600
                     
-                last_snapped_base_ts = current_snapped_base_ts + (CHUNK_SIZE * 10)
+                    dt_reclamp = datetime.fromtimestamp(current_snapped_base_ts)
+                    if dt_reclamp.hour < 9:
+                        dt_reclamp -= timedelta(days=1)
+                        dt_reclamp = dt_reclamp.replace(hour=16, minute=0, second=0)
+                    elif dt_reclamp.hour >= 18:
+                        dt_reclamp = dt_reclamp.replace(hour=16, minute=0, second=0)
+                        
+                    if dt_reclamp.weekday() >= 5:
+                        dt_reclamp -= timedelta(days=(dt_reclamp.weekday() - 4))
+                        dt_reclamp = dt_reclamp.replace(hour=16, minute=0, second=0)
+                        
+                    current_snapped_base_ts = int(dt_reclamp.timestamp())
+                    last_backward_base_ts = current_snapped_base_ts
+                else:
+                    last_forward_base_ts = current_snapped_base_ts + (CHUNK_SIZE * 10)
+                    last_backward_base_ts = current_snapped_base_ts
 
             fallback_ts = current_snapped_base_ts + (intra_chunk_idx * 10)
             resolved_ts = resolve_timestamp(cmd, fallback_ts)
@@ -478,14 +542,65 @@ def parse_bash_history(
         else:
             first_known_timestamp = resolved_timestamps[first_known_idx]
             
-        # Backward fill
-        for idx in range(first_known_idx - 1, -1, -1):
-            resolved_timestamps[idx] = resolved_timestamps[idx + 1] - 10
+        import time
+        now = int(time.time())
+        
+        # Bounded Interpolation
+        idx = 0
+        while idx < n:
+            if resolved_timestamps[idx] is not None:
+                idx += 1
+                continue
+                
+            # We found a gap of None values
+            start_gap = idx
+            while idx < n and resolved_timestamps[idx] is None:
+                idx += 1
+            end_gap = idx - 1
             
-        # Forward fill
-        for idx in range(1, n):
-            if resolved_timestamps[idx] is None:
-                resolved_timestamps[idx] = resolved_timestamps[idx - 1] + 10
+            gap_size = end_gap - start_gap + 1
+            
+            # Find bounds
+            T_start = resolved_timestamps[start_gap - 1] if start_gap > 0 else None
+            T_end = resolved_timestamps[end_gap + 1] if end_gap + 1 < n else None
+            
+            if T_start is not None and T_end is not None:
+                # Interpolate between T_start and T_end
+                step = max(1, (T_end - T_start) // (gap_size + 1))
+                for i in range(start_gap, end_gap + 1):
+                    resolved_timestamps[i] = T_start + step * (i - start_gap + 1)
+            elif T_start is not None and T_end is None:
+                # Suffix: Clamped Sub-Division
+                # The trailing commands shouldn't exceed `now` or `mtime`.
+                upper_bound = min(now, mtime)
+                if T_start > upper_bound:
+                    step = 10
+                else:
+                    available_time = upper_bound - T_start
+                    # We expect commands to take roughly 10s. If we have room, use 10s. Otherwise clamp.
+                    step = min(10, max(1, available_time // (gap_size + 1)))
+                for i in range(start_gap, end_gap + 1):
+                    resolved_timestamps[i] = T_start + step * (i - start_gap + 1)
+            elif T_start is None and T_end is not None:
+                # Prefix: Backward fill, clamped to not go below 0
+                available_time = T_end
+                step = min(10, max(1, available_time // (gap_size + 1)))
+                for i in range(end_gap, start_gap - 1, -1):
+                    resolved_timestamps[i] = T_end - step * (end_gap - i + 1)
+            else:
+                # No anchors at all (should be handled by the other branch, but just in case)
+                for i in range(start_gap, end_gap + 1):
+                    resolved_timestamps[i] = mtime - (end_gap - i + 1) * 10
+                    
+        # Enforce absolute bounds and sort/re-clamp after interpolation
+        # to handle negative or massive jumps safely
+        five_years_ago = now - (5 * 365 * 24 * 60 * 60)
+        for i in range(n):
+            if resolved_timestamps[i] < five_years_ago:
+                resolved_timestamps[i] = five_years_ago
+            elif resolved_timestamps[i] > now:
+                resolved_timestamps[i] = now
+        resolved_timestamps.sort()
                 
         for idx, (t, cmd) in enumerate(temp_commands):
             fallback_ts = resolved_timestamps[idx]
@@ -512,6 +627,97 @@ def parse_bash_history(
     filtered_commands.sort(key=lambda x: x.timestamp)
     return filtered_commands
 
+def parse_fish_history(
+    filepath: str,
+    existing_lookup: Optional[Dict[str, List[int]]] = None,
+    project_paths: Optional[Union[List[str], Callable[[], List[str]]]] = None
+) -> List[Command]:
+    """Parse Fish shell history."""
+    commands = []
+    if not os.path.exists(filepath):
+        return commands
+        
+    try:
+        mtime = int(os.path.getmtime(filepath))
+    except Exception:
+        mtime = int(datetime.now().timestamp())
+        
+    temp_commands = []
+    with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
+        current_cmd = None
+        current_when = None
+        
+        for line in f:
+            line = line.rstrip('\r\n')
+            if line.startswith('- cmd: '):
+                if current_cmd is not None:
+                    decoded_cmd = current_cmd.replace('\\n', '\n').replace('\\\\', '\\')
+                    cleaned = clean_command(decoded_cmd)
+                    if cleaned:
+                        temp_commands.append((current_when, cleaned))
+                current_cmd = line[7:]
+                current_when = None
+            elif line.startswith('  when: '):
+                try:
+                    current_when = int(line[8:])
+                except ValueError:
+                    pass
+            elif current_cmd is not None and not line.startswith('  '):
+                pass
+
+        if current_cmd is not None:
+            decoded_cmd = current_cmd.replace('\\n', '\n').replace('\\\\', '\\')
+            cleaned = clean_command(decoded_cmd)
+            if cleaned:
+                temp_commands.append((current_when, cleaned))
+                
+    return _assign_missing_timestamps_fallback(temp_commands, mtime, existing_lookup)
+
+def parse_powershell_history(
+    filepath: str,
+    existing_lookup: Optional[Dict[str, List[int]]] = None,
+    project_paths: Optional[Union[List[str], Callable[[], List[str]]]] = None
+) -> List[Command]:
+    """Parse PowerShell ConsoleHost_history.txt"""
+    commands = []
+    if not os.path.exists(filepath):
+        return commands
+        
+    try:
+        mtime = int(os.path.getmtime(filepath))
+    except Exception:
+        mtime = int(datetime.now().timestamp())
+        
+    raw_lines = []
+    with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
+        for line in f:
+            raw_lines.append(line)
+            
+    temp_commands = []
+    i = 0
+    while i < len(raw_lines):
+        line = raw_lines[i]
+        line_stripped = line.strip()
+        if not line_stripped:
+            i += 1
+            continue
+            
+        cmd_lines = [line]
+        i += 1
+        while i < len(raw_lines):
+            # PowerShell line continuation is backtick
+            if not cmd_lines[-1].rstrip().endswith('`'):
+                break
+            cmd_lines.append(raw_lines[i])
+            i += 1
+            
+        cmd_str = "".join(cmd_lines)
+        cmd_cleaned = clean_command(cmd_str)
+        if cmd_cleaned:
+            temp_commands.append((None, cmd_cleaned))
+            
+    return _assign_missing_timestamps_fallback(temp_commands, mtime, existing_lookup)
+
 def parse_all_histories(
     filepaths: List[str],
     db: Optional[Any] = None,
@@ -532,6 +738,10 @@ def parse_all_histories(
             all_commands.extend(parse_zsh_history(path, existing_lookup, project_paths=project_paths))
         elif "bash" in filename:
             all_commands.extend(parse_bash_history(path, existing_lookup, project_paths=project_paths))
+        elif "fish_history" in filename:
+            all_commands.extend(parse_fish_history(path, existing_lookup, project_paths=project_paths))
+        elif "consolehost_history.txt" in filename:
+            all_commands.extend(parse_powershell_history(path, existing_lookup, project_paths=project_paths))
         else:
             # Fallback to bash parser for unknown file types
             all_commands.extend(parse_bash_history(path, existing_lookup, project_paths=project_paths))
