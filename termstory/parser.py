@@ -164,12 +164,12 @@ def parse_zsh_history(
         oldest_ts = min(item["timestamp"] for item in timestamped_items)
         # Push anchor back so the spread window has room behind the oldest real timestamp.
         # Assume ~50 commands/day average (86400 / 50 = 1728 seconds per command).
-        natural_anchor = oldest_ts - max(60, n_legacy * 1728)
+        natural_anchor = oldest_ts - max(365 * 86400, n_legacy * 1728)
         anchor_time = min(natural_anchor, file_mtime - 60)
     else:
         # 100% legacy (no EXTENDED_HISTORY ever): anchor at file mtime pushed back
         # by 1728 seconds per legacy command so they spread across many days.
-        anchor_time = file_mtime - max(60, n_legacy * 1728)
+        anchor_time = file_mtime - max(365 * 86400, n_legacy * 1728)
 
     # ── Build the final list of Commands ────────────────────────────────────────
     # Apply the database timestamp-locking lookup so synthetic timestamps are stable
@@ -257,7 +257,7 @@ def parse_zsh_history(
     window = max(n_unresolvable * 1728, 365 * 86400)
     for idx, item in enumerate(unresolvable):
         fraction = idx / max(n_unresolvable, 1)
-        fallback_ts = int((anchor_time - window) + fraction * window)
+        fallback_ts = int(anchor_time + fraction * window)
         resolved_ts = resolve_timestamp(item["command"], fallback_ts)
         resolved_commands.append(Command(
             timestamp=resolved_ts,
@@ -380,10 +380,12 @@ def parse_bash_history(
 
     if not has_any_timestamps:
         # None of the commands have timestamps (standard Bash default setup)
-        # Space them backward from the file modification time
-        start_time = mtime - (len(temp_commands) * 10)
+        n_cmds = len(temp_commands)
+        window = max(n_cmds * 1728, 365 * 86400)
+        start_time = mtime - max(365 * 86400, n_cmds * 1728)
         for idx, (t, cmd) in enumerate(temp_commands):
-            fallback_ts = start_time + (idx * 10)
+            fraction = idx / max(n_cmds, 1)
+            fallback_ts = int(start_time + fraction * window)
             resolved_ts = resolve_timestamp(cmd, fallback_ts)
             commands_to_return.append(Command(
                 timestamp=resolved_ts,

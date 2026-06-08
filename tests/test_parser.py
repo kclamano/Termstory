@@ -91,13 +91,13 @@ def test_parse_zsh_history_legacy_fallback(tmp_path):
     commands = parse_zsh_history(str(temp_file))
     assert len(commands) == 2
     
-    # 100% legacy branch: anchor_time = file_mtime - max(60, n_legacy * 1728)
-    # n_legacy=2, so anchor_time = 1748851220 - max(60, 3456) = 1748851220 - 3456 = 1748847764
+    # 100% legacy branch: anchor_time = file_mtime - max(365*86400, n_legacy * 1728)
+    # n_legacy=2, so anchor_time = 1748851220 - 31536000 = 1717315220
     # Phase 4: window = max(2*1728, 365*86400) = 31536000
-    #   idx=0 (git status): 1748847764 - 31536000 + 0          = 1717311764
-    #   idx=1 (docker ps):  1748847764 - 31536000 + 0.5*window = 1733079764
-    assert commands[0].timestamp == 1717311764
-    assert commands[1].timestamp == 1733079764
+    #   idx=0 (git status): 1717315220 + 0          = 1717315220
+    #   idx=1 (docker ps):  1717315220 + 0.5*window = 1733083220
+    assert commands[0].timestamp == 1717315220
+    assert commands[1].timestamp == 1733083220
     assert commands[0].command == "git status"
     assert commands[1].command == "docker ps"
 
@@ -116,17 +116,17 @@ def test_parse_zsh_history_hybrid_mode(tmp_path):
     assert len(commands) == 4
     
     # Hybrid branch: oldest_ts = 1748851200, n_legacy = 2
-    # natural_anchor = 1748851200 - max(60, 2*1728) = 1748851200 - 3456 = 1748847744
-    # file_mtime is ~now (set by tmp_path write) so file_mtime - 60 >> 1748847744
-    # anchor_time = min(1748847744, file_mtime - 60) = 1748847744
+    # natural_anchor = 1748851200 - max(365*86400, 2*1728) = 1748851200 - 31536000 = 1717315200
+    # file_mtime is ~now (set by tmp_path write) so file_mtime - 60 >> 1717315200
+    # anchor_time = min(1717315200, file_mtime - 60) = 1717315200
     # Phase 4: window = max(2*1728, 365*86400) = 31536000
-    #   idx=0 (git pull):   1748847744 - 31536000 + 0          = 1717311744
-    #   idx=1 (git status): 1748847744 - 31536000 + 0.5*window = 1733079744
+    #   idx=0 (git pull):   1717315200 + 0          = 1717315200
+    #   idx=1 (git status): 1717315200 + 0.5*window = 1733083200
     assert commands[0].command == "git pull"
-    assert commands[0].timestamp == 1717311744
+    assert commands[0].timestamp == 1717315200
 
     assert commands[1].command == "git status"
-    assert commands[1].timestamp == 1733079744
+    assert commands[1].timestamp == 1733083200
 
     assert commands[2].command == "git commit -m 'feat'"
     assert commands[2].timestamp == 1748851200
