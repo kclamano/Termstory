@@ -71,3 +71,55 @@ def test_sanitize_session_commands():
     sanitized, is_blacklisted = sanitize_session_commands(cmds)
     assert is_blacklisted is True
     assert sanitized is None
+
+import os
+from unittest.mock import patch
+
+def test_custom_termstoryignore(tmp_path):
+    import termstory.sanitizer as sanitizer
+    
+    ignore_file = tmp_path / ".termstoryignore"
+    ignore_file.write_text("my_custom_secret_pattern\nanother_secret")
+    
+    with patch("termstory.sanitizer.os.path.expanduser") as mock_expanduser:
+        # Mock expanduser to return our temp ignore file for the first path only
+        mock_expanduser.side_effect = lambda x: str(ignore_file) if x == '~/.termstoryignore' else str(tmp_path / "nonexistent")
+        
+        # Clear existing patterns and reload
+        original_patterns = sanitizer.CUSTOM_REDACTION_PATTERNS.copy()
+        sanitizer.CUSTOM_REDACTION_PATTERNS.clear()
+        
+        sanitizer.load_custom_ignore_rules()
+        
+        assert len(sanitizer.CUSTOM_REDACTION_PATTERNS) == 2
+        
+        # Test if it redacts
+        cmd = "echo my_custom_secret_pattern is here"
+        redacted = sanitizer.redact_command(cmd)
+        assert redacted == "echo [REDACTED_CUSTOM] is here"
+        
+        # Restore original patterns
+        sanitizer.CUSTOM_REDACTION_PATTERNS = original_patterns
+
+def test_high_entropy_heuristic():
+    # Length >= 24, high entropy
+    # e.g., "aB3cD4eF5gH6iJ7kL8mN9oP0qR1sT2uV3wX4yZ5"
+    high_entropy_token = "aB3cD4eF5gH6iJ7kL8mN9oP0qR1sT2uV3w"
+    
+    # Check if length is >= 24
+    assert len(high_entropy_token) >= 24
+    
+    # Should be redacted
+    cmd = f"echo {high_entropy_token}"
+    redacted = redact_command(cmd)
+    
+    assert "[REDACTED_ENTROPY]" in redacted
+    assert high_entropy_token not in redacted
+    
+    # Low entropy string of length >= 24 should NOT be redacted
+    low_entropy_token = "aaaaaaaaaaaaaaaaaaaaaaaa"
+    assert len(low_entropy_token) >= 24
+    cmd2 = f"echo {low_entropy_token}"
+    redacted2 = redact_command(cmd2)
+    assert "[REDACTED_ENTROPY]" not in redacted2
+    assert low_entropy_token in redacted2

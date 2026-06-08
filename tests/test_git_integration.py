@@ -55,3 +55,28 @@ def test_git_operations_on_temp_repo(tmp_path):
     assert commits[0]["cleaned_message"] == "Add hello world file"
     assert len(commits[0]["hash"]) == 40
     assert commits[0]["timestamp"] > 0
+
+from unittest.mock import patch
+def test_git_missing_or_failing(tmp_path):
+    # Test subprocess.run raising an exception (e.g. git not found)
+    with patch("termstory.git_integration.subprocess.run") as mock_run:
+        mock_run.side_effect = Exception("git not found")
+        assert not is_git_repo(str(tmp_path))
+        assert get_project_commits(str(tmp_path), since_ts=0) == []
+        
+    # Test subprocess.run returning non-zero return code
+    with patch("termstory.git_integration.subprocess.run") as mock_run:
+        class MockResult:
+            returncode = 1
+            stdout = ""
+        mock_run.return_value = MockResult()
+        assert not is_git_repo(str(tmp_path))
+        
+    # Test get_project_commits returning non-zero return code
+    with patch("termstory.git_integration.is_git_repo", return_value=True):
+        with patch("termstory.git_integration.subprocess.run") as mock_run:
+            class MockResult:
+                returncode = 1
+                stdout = ""
+            mock_run.return_value = MockResult()
+            assert get_project_commits(str(tmp_path), since_ts=0) == []

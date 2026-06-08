@@ -76,13 +76,13 @@ def get_project_commits(project_path: str, since_ts: int, timeout: int = 10) -> 
     try:
         # Run git log with since timestamp filter
         # %H: commit hash
-        # %at: author date (Unix timestamp)
-        # %s: commit subject line
+        # %ct: committer date (Unix timestamp)
+        # %s: commit message
         res = subprocess.run(
             [
                 "git", "-C", abs_path, "log", 
                 f"--since={since_ts}", 
-                "--pretty=format:%H|%at|%s"
+                "--pretty=format:%H|%ct|%s"
             ],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,

@@ -1,12 +1,42 @@
 import re
+import os
+import math
 from typing import List, Tuple, Optional
 
+# Load custom redaction patterns from .termstoryignore
+CUSTOM_REDACTION_PATTERNS = []
+def load_custom_ignore_rules():
+    global CUSTOM_REDACTION_PATTERNS
+    paths = [
+        os.path.expanduser('~/.termstoryignore'),
+        os.path.expanduser('~/.termstory/.termstoryignore')
+    ]
+    for path in paths:
+        if os.path.exists(path):
+            try:
+                with open(path, 'r') as f:
+                    for line in f:
+                        line = line.strip()
+                        if line and not line.startswith('#'):
+                            try:
+                                CUSTOM_REDACTION_PATTERNS.append(re.compile(line, re.IGNORECASE))
+                            except re.error:
+                                pass
+            except Exception:
+                pass
+
+load_custom_ignore_rules()
 # Blacklist patterns - if a command matches any of these, the entire session is dropped from AI
 BLACKLIST_PATTERNS = [
     re.compile(r'\bvault\b', re.IGNORECASE),
     re.compile(r'\baws\s+configure\b', re.IGNORECASE),
     re.compile(r'\bgh\s+auth\b', re.IGNORECASE),
-    re.compile(r'\bkubectl\s+.*?\bcreate\s+secret\b', re.IGNORECASE)
+    re.compile(r'\bkubectl\s+.*?\bcreate\s+secret\b', re.IGNORECASE),
+    # Modern token prefixes
+    re.compile(r'\bgithub_pat_[a-zA-Z0-9_]+\b', re.IGNORECASE),
+    re.compile(r'\bsk_live_[a-zA-Z0-9_]+\b', re.IGNORECASE),
+    re.compile(r'\bnpm_[a-zA-Z0-9]{36}\b', re.IGNORECASE),
+    re.compile(r'\bsk-(?:proj-|ant-api03-)?[a-zA-Z0-9_-]{20,}\b', re.IGNORECASE)
 ]
 
 # Hardcoded redaction patterns
@@ -54,6 +84,26 @@ AWS_KEY_PATTERN = re.compile(r'\b(?:AKIA|ASIA)[A-Z0-9]{16}\b')
 SLACK_TOKEN_PATTERN = re.compile(r'\bxoxb-[0-9]{11,13}-[a-zA-Z0-9]{24}\b')
 BEARER_TOKEN_PATTERN = re.compile(r'\bbearer\s+([a-zA-Z0-9\-._~+/]+=*)\b', re.IGNORECASE)
 SSH_PRIVATE_KEY_PATTERN = re.compile(r'-----BEGIN\s+[A-Z ]+\s+PRIVATE\s+KEY-----.*?-----END\s+[A-Z ]+\s+PRIVATE\s+KEY-----', re.DOTALL | re.IGNORECASE)
+
+def calculate_entropy(s: str) -> float:
+    if not s:
+        return 0.0
+    entropy = 0.0
+    for x in set(s):
+        p_x = float(s.count(x)) / len(s)
+        entropy += - p_x * math.log2(p_x)
+    return entropy
+
+def redact_high_entropy(cmd: str) -> str:
+    def replacer(match):
+        s = match.group(0)
+        # Avoid redacting git commit hashes and normal text by requiring entropy > 4.3
+        if calculate_entropy(s) > 4.3:
+            return "[REDACTED_ENTROPY]"
+        return s
+    
+    # Match strings of length >= 24 that consist of base64-like characters
+    return re.sub(r'\b[a-zA-Z0-9_+/=-]{24,}\b', replacer, cmd)
 
 def should_blacklist_command(cmd: str) -> bool:
     """Check if the command is blacklisted from AI processing"""
@@ -123,6 +173,13 @@ def redact_command(cmd: str) -> str:
         
     cmd = SSH_HOST_PATTERN.sub(ssh_replacer, cmd)
     
+    # 9. Entropy-based heuristic for high-entropy strings
+    cmd = redact_high_entropy(cmd)
+    
+    # 10. Custom User Rules
+    for pattern in CUSTOM_REDACTION_PATTERNS:
+        cmd = pattern.sub('[REDACTED_CUSTOM]', cmd)
+        
     return cmd
 
 def sanitize_session_commands(commands: List[str]) -> Tuple[Optional[List[str]], bool]:

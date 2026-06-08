@@ -337,45 +337,65 @@ class TimestampDetective:
         cwd_stack: List[str] = []  # pushd/popd stack
 
         for idx, item in enumerate(legacy_items):
-            cmd = item["command"].strip()
+            cmd_full = item["command"].strip()
+            
+            subcommands = [s.strip() for s in re.split(r'&&|;|\|\|', cmd_full)]
+            
+            for cmd in subcommands:
+                # ── cd ─────────────────────────────────────────────────────────
+                if cmd == "cd" or cmd.startswith("cd ") or cmd.startswith("cd\t"):
+                    import shlex
+                    try:
+                        tokens = shlex.split(cmd)
+                    except Exception:
+                        tokens = cmd.split()
+                    
+                    target = ""
+                    if len(tokens) > 1:
+                        path_args = [t for t in tokens[1:] if not t.startswith('-') or t == '-']
+                        if path_args:
+                            target = path_args[0]
+                    
+                    new_cwd = current_cwd
 
-            # ── cd ─────────────────────────────────────────────────────────
-            if cmd == "cd" or cmd.startswith("cd "):
-                target = cmd[3:].strip() if cmd.startswith("cd ") else ""
-                new_cwd = current_cwd  # default: no change
+                    if not target or target in ("~", "$HOME"):
+                        new_cwd = home
+                    elif target == "-":
+                        new_cwd, prev_cwd = prev_cwd, current_cwd
+                    elif target.startswith("/"):
+                        new_cwd = os.path.normpath(os.path.expanduser(target))
+                    else:
+                        new_cwd = os.path.normpath(
+                            os.path.join(current_cwd, os.path.expanduser(target))
+                        )
 
-                if not target or target in ("~", "$HOME"):
-                    new_cwd = home
-                elif target == "-":
-                    # cd - swaps current and previous
-                    new_cwd, prev_cwd = prev_cwd, current_cwd
-                elif target.startswith("/"):
-                    # Absolute path
-                    new_cwd = os.path.normpath(os.path.expanduser(target))
-                else:
-                    # Relative path (handles `..`, `subdir`, `~/foo`)
-                    new_cwd = os.path.normpath(
-                        os.path.join(current_cwd, os.path.expanduser(target))
-                    )
+                    if target != "-":
+                        prev_cwd = current_cwd
+                    current_cwd = new_cwd
 
-                if target != "-":  # `-` already swapped prev_cwd above
-                    prev_cwd = current_cwd
-                current_cwd = new_cwd
+                # ── pushd ──────────────────────────────────────────────────────
+                elif cmd.startswith("pushd ") or cmd.startswith("pushd\t"):
+                    import shlex
+                    try:
+                        tokens = shlex.split(cmd)
+                    except Exception:
+                        tokens = cmd.split()
+                        
+                    if len(tokens) > 1:
+                        target = tokens[1]
+                        cwd_stack.append(current_cwd)
+                        if target.startswith("/"):
+                            current_cwd = os.path.normpath(os.path.expanduser(target))
+                        elif target.startswith("~"):
+                            current_cwd = os.path.normpath(os.path.expanduser(target))
+                        else:
+                            current_cwd = os.path.normpath(
+                                os.path.join(current_cwd, os.path.expanduser(target))
+                            )
 
-            # ── pushd ──────────────────────────────────────────────────────
-            elif cmd.startswith("pushd "):
-                target = cmd[6:].strip()
-                cwd_stack.append(current_cwd)
-                if target.startswith("/"):
-                    current_cwd = os.path.normpath(os.path.expanduser(target))
-                else:
-                    current_cwd = os.path.normpath(
-                        os.path.join(current_cwd, os.path.expanduser(target))
-                    )
-
-            # ── popd ───────────────────────────────────────────────────────
-            elif cmd == "popd" and cwd_stack:
-                current_cwd = cwd_stack.pop()
+                # ── popd ───────────────────────────────────────────────────────
+                elif cmd == "popd" and cwd_stack:
+                    current_cwd = cwd_stack.pop()
 
             cwd_map[idx] = current_cwd
 
@@ -433,7 +453,9 @@ class TimestampDetective:
         for repo_path in repos_to_try:
             commits = self._load_git_log(repo_path)
             repo_name = os.path.basename(repo_path)
-            for commit in commits:
+            for commit in reversed(commits):
+                if commit["hash"] in getattr(self, '_used_commit_hashes', set()):
+                    continue
                 commit_cleaned = self._clean_for_match(commit["message"])
                 ratio = difflib.SequenceMatcher(
                     None, cleaned_cmd_msg, commit_cleaned
@@ -443,9 +465,15 @@ class TimestampDetective:
                     if self._is_valid_timestamp(ts):
                         best_ratio = ratio
                         best_ts = ts
+                        best_hash = commit["hash"]
                         best_source = f"git log: {repo_name}@{commit['hash'][:7]}"
 
-        return (best_ts, best_source) if best_ts is not None else None
+        if best_ts is not None:
+            if not hasattr(self, '_used_commit_hashes'):
+                self._used_commit_hashes = set()
+            self._used_commit_hashes.add(best_hash)
+            return (best_ts, best_source)
+        return None
 
 
 
@@ -1263,9 +1291,14 @@ class TimestampDetective:
         ]
         n_suffix = len(suffix_unresolved)
         window = max(n_suffix * 10, 86400)
+        if t_last + window > self.now:
+            window = max(n_suffix, self.now - t_last)
         for offset, i in enumerate(suffix_unresolved):
             fraction = (offset + 1) / (n_suffix + 1)
-            result[i]["detected_ts"] = int(t_last + fraction * window)
+            ts = int(t_last + fraction * window)
+            if ts > self.now:
+                ts = self.now
+            result[i]["detected_ts"] = ts
             result[i]["detected_source"] = f"Post-anchor proportional spread (after {src_last})"
             result[i]["is_legacy_still"] = True
 
