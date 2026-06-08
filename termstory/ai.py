@@ -2,10 +2,19 @@ import json
 import urllib.request
 import urllib.error
 import threading
+import time
+import socket
 from typing import List, Optional
 from termstory.sanitizer import sanitize_session_commands
 
 _local_ai_state = threading.local()
+
+# Circuit Breaker Configuration
+_circuit_breaker_lock = threading.Lock()
+_circuit_breaker_failures = 0
+_circuit_breaker_open_until = 0.0
+MAX_FAILURES = 3
+COOLDOWN_SECONDS = 60.0
 
 def get_last_ai_error() -> Optional[str]:
     """Retrieve the last AI call error message, if any, for the current thread."""
@@ -31,6 +40,12 @@ def _send_llm_request(
     if provider == "disabled":
         return None
         
+    global _circuit_breaker_failures, _circuit_breaker_open_until
+    with _circuit_breaker_lock:
+        if time.time() < _circuit_breaker_open_until:
+            _local_ai_state.last_error = "Circuit breaker open: Too many LLM timeouts. Requests temporarily disabled."
+            return None
+
     headers = {
         "Content-Type": "application/json",
         "User-Agent": "TermStory/1.0"
@@ -61,58 +76,109 @@ def _send_llm_request(
     req_data = json.dumps(body).encode("utf-8")
     req = urllib.request.Request(endpoint, data=req_data, headers=headers, method="POST")
     
-    try:
-        # Set a reasonable timeout for the TUI background thread
-        with urllib.request.urlopen(req, timeout=timeout) as response:
-            resp_data = response.read().decode("utf-8")
-            resp_json = json.loads(resp_data)
-            result = resp_json["choices"][0]["message"]["content"].strip()
-            # Clean up any quotes added by the LLM
-            if result.startswith('"') and result.endswith('"'):
-                result = result[1:-1]
-            if result.startswith("'") and result.endswith("'"):
-                result = result[1:-1]
-            return result
-    except urllib.error.HTTPError as e:
+    result_box = []
+    error_box = []
+
+    def _worker():
         try:
-            raw_body = e.read().decode("utf-8").strip()
-            if not raw_body:
-                reason_str = " ".join(str(e.reason).split())
-                if len(reason_str) > 200:
-                    reason_str = reason_str[:200] + "..."
-                _local_ai_state.last_error = f"HTTP Error {e.code}: {reason_str}"
-            else:
-                try:
-                    err_json = json.loads(raw_body)
-                    msg = err_json.get("error", {}).get("message")
-                    if msg:
-                        msg_str = " ".join(str(msg).split())
-                        if len(msg_str) > 200:
-                            msg_str = msg_str[:200] + "..."
-                        _local_ai_state.last_error = f"HTTP Error {e.code}: {msg_str}"
-                    else:
+            old_timeout = socket.getdefaulttimeout()
+            socket.setdefaulttimeout(timeout)
+            try:
+                # Set a reasonable timeout for the TUI background thread
+                with urllib.request.urlopen(req, timeout=timeout) as response:
+                    resp_data = response.read().decode("utf-8")
+                    resp_json = json.loads(resp_data)
+                    result = resp_json["choices"][0]["message"]["content"].strip()
+                    # Clean up any quotes added by the LLM
+                    if result.startswith('"') and result.endswith('"'):
+                        result = result[1:-1]
+                    if result.startswith("'") and result.endswith("'"):
+                        result = result[1:-1]
+                    result_box.append(result)
+            finally:
+                socket.setdefaulttimeout(old_timeout)
+        except Exception as e:
+            error_box.append(e)
+
+    worker_thread = threading.Thread(target=_worker, daemon=True)
+    worker_thread.start()
+    
+    # Strict wall-clock timeout wrapper using threading
+    worker_thread.join(timeout + 1.0)
+    
+    if worker_thread.is_alive():
+        # Half-open socket zombie or severe hang detected
+        with _circuit_breaker_lock:
+            _circuit_breaker_failures += 1
+            if _circuit_breaker_failures >= MAX_FAILURES:
+                _circuit_breaker_open_until = time.time() + COOLDOWN_SECONDS
+        _local_ai_state.last_error = f"Strict timeout exceeded ({timeout}s). LLM process hung."
+        return None
+        
+    if error_box:
+        e = error_box[0]
+        # Identify if error is a timeout
+        is_timeout = False
+        if isinstance(e, socket.timeout) or isinstance(e, TimeoutError):
+            is_timeout = True
+        elif isinstance(e, urllib.error.URLError) and isinstance(e.reason, socket.timeout):
+            is_timeout = True
+            
+        if is_timeout:
+            with _circuit_breaker_lock:
+                _circuit_breaker_failures += 1
+                if _circuit_breaker_failures >= MAX_FAILURES:
+                    _circuit_breaker_open_until = time.time() + COOLDOWN_SECONDS
+        else:
+            with _circuit_breaker_lock:
+                _circuit_breaker_failures = 0
+                
+        if isinstance(e, urllib.error.HTTPError):
+            try:
+                raw_body = e.read().decode("utf-8").strip()
+                if not raw_body:
+                    reason_str = " ".join(str(e.reason).split())
+                    if len(reason_str) > 200:
+                        reason_str = reason_str[:200] + "..."
+                    _local_ai_state.last_error = f"HTTP Error {e.code}: {reason_str}"
+                else:
+                    try:
+                        err_json = json.loads(raw_body)
+                        msg = err_json.get("error", {}).get("message")
+                        if msg:
+                            msg_str = " ".join(str(msg).split())
+                            if len(msg_str) > 200:
+                                msg_str = msg_str[:200] + "..."
+                            _local_ai_state.last_error = f"HTTP Error {e.code}: {msg_str}"
+                        else:
+                            body_str = " ".join(raw_body.split())
+                            if len(body_str) > 200:
+                                body_str = body_str[:200] + "..."
+                            _local_ai_state.last_error = f"HTTP Error {e.code}: {body_str}"
+                    except Exception:
                         body_str = " ".join(raw_body.split())
                         if len(body_str) > 200:
                             body_str = body_str[:200] + "..."
                         _local_ai_state.last_error = f"HTTP Error {e.code}: {body_str}"
-                except Exception:
-                    body_str = " ".join(raw_body.split())
-                    if len(body_str) > 200:
-                        body_str = body_str[:200] + "..."
-                    _local_ai_state.last_error = f"HTTP Error {e.code}: {body_str}"
-        except Exception:
-            reason_str = " ".join(str(e.reason).split())
-            if len(reason_str) > 200:
-                reason_str = reason_str[:200] + "..."
-            _local_ai_state.last_error = f"HTTP Error {e.code}: {reason_str}"
-        return None
-    except Exception as e:
-        # Gracefully fail and capture normalized exception
-        msg = " ".join(str(e).split())
-        if len(msg) > 200:
-            msg = msg[:200] + "..."
-        _local_ai_state.last_error = msg
-        return None
+            except Exception:
+                reason_str = " ".join(str(e.reason).split())
+                if len(reason_str) > 200:
+                    reason_str = reason_str[:200] + "..."
+                _local_ai_state.last_error = f"HTTP Error {e.code}: {reason_str}"
+            return None
+        else:
+            # Gracefully fail and capture normalized exception
+            msg = " ".join(str(e).split())
+            if len(msg) > 200:
+                msg = msg[:200] + "..."
+            _local_ai_state.last_error = msg
+            return None
+
+    # Success
+    with _circuit_breaker_lock:
+        _circuit_breaker_failures = 0
+        
+    return result_box[0] if result_box else None
 
 def generate_ai_summary(
     commands: List[str],

@@ -11,12 +11,11 @@ from termstory.date_utils import get_current_time, format_date_range
 from termstory.project import disambiguate_project_names
 
 from rich.console import Console, Group
-from rich.panel import Panel
 from rich.table import Table
 from rich.align import Align
 from rich.rule import Rule
 from rich.text import Text
-from rich.box import ROUNDED, MINIMAL, SIMPLE
+from rich.box import MINIMAL, SIMPLE
 
 DISPLAY_NAMES = {
     "git": "Git",
@@ -199,7 +198,7 @@ def format_week_output(sessions: List[Session], projects: List[Project], start_t
     header_title = f"📊 This Week ({range_str})"
     
     if not sessions:
-        return render_to_string(Panel("No sessions recorded this week.", title=header_title, border_style="yellow", box=ROUNDED))
+        return render_to_string(Text.from_markup(f"{header_title}\\n\\n[yellow]No sessions recorded this week.[/]"))
         
     display_names = disambiguate_project_names(projects)
     project_map = {p.id: p for p in projects if p.id is not None}
@@ -288,7 +287,8 @@ def format_week_output(sessions: List[Session], projects: List[Project], start_t
                 commit_lines.append(f"  [dim]... and {len(proj_commits) - 10} more commits[/]")
             proj_group_items.append(Text.from_markup("\n".join(commit_lines)))
             
-        elements.append(Panel(Group(*proj_group_items), box=ROUNDED, border_style="blue"))
+        proj_group_items.append(Text.from_markup("\n[dim]" + "─" * 40 + "[/]"))
+        elements.append(Group(*proj_group_items))
         
     footer_text = [
         f"📈 Total Work Time This Week: [bold green]{format_duration(total_week_time)}[/]",
@@ -296,9 +296,9 @@ def format_week_output(sessions: List[Session], projects: List[Project], start_t
     ]
     
     outer_group = Group(
-        Panel(Align.center(f"[bold green]{header_title}[/]"), border_style="green", box=ROUNDED),
+        Text.from_markup(f"[bold green]{header_title}[/]\\n"),
         *elements,
-        Panel(Text.from_markup("\n".join(footer_text)), border_style="green")
+        Text.from_markup("\\n" + "\\n".join(footer_text))
     )
     
     return render_to_string(outer_group)
@@ -313,7 +313,7 @@ def format_month_output(sessions: List[Session], projects: List[Project], year: 
     header_title = f"📊 {month_name} {year} ({days_logged} of {total_days} days logged)"
     
     if not sessions:
-        return render_to_string(Panel("No sessions recorded this month.", title=header_title, border_style="yellow", box=ROUNDED))
+        return render_to_string(Text.from_markup(f"{header_title}\\n\\n[yellow]No sessions recorded this month.[/]"))
         
     display_names = disambiguate_project_names(projects)
     project_map = {p.id: p for p in projects if p.id is not None}
@@ -359,7 +359,8 @@ def format_month_output(sessions: List[Session], projects: List[Project], year: 
             Text.from_markup(f"  Days: [dim]{days_str}[/]")
         ]
         
-        elements.append(Panel(Group(*proj_group_items), box=ROUNDED, border_style="blue"))
+        proj_group_items.append(Text.from_markup("\\n[dim]" + "─" * 40 + "[/]"))
+        elements.append(Group(*proj_group_items))
         
     footer_text = [
         f"Total Work Days: [bold]{total_work_days}[/]",
@@ -370,9 +371,9 @@ def format_month_output(sessions: List[Session], projects: List[Project], year: 
         footer_text.append(f"Average Per Day: [bold yellow]{format_duration(avg_per_day)}[/]")
         
     outer_group = Group(
-        Panel(Align.center(f"[bold green]{header_title}[/]"), border_style="green", box=ROUNDED),
+        Text.from_markup(f"[bold green]{header_title}[/]\\n"),
         *elements,
-        Panel(Text.from_markup("\n".join(footer_text)), border_style="green")
+        Text.from_markup("\\n" + "\\n".join(footer_text))
     )
     
     return render_to_string(outer_group)
@@ -461,12 +462,12 @@ def format_projects_list(projects: List[Project]) -> str:
     header_title = "📚 Your Projects (All Time)"
     
     if not projects:
-        return render_to_string(Panel("No projects found.", title=header_title, border_style="yellow", box=ROUNDED))
+        return render_to_string(Text.from_markup(f"{header_title}\\n\\n[yellow]No projects found.[/]"))
         
     total_time = sum(p.total_time for p in projects)
     total_sessions = sum(p.session_count for p in projects)
     
-    table = Table(box=ROUNDED, border_style="blue", show_header=True)
+    table = Table(box=SIMPLE, border_style="blue", show_header=True)
     table.add_column("#", justify="right", style="dim")
     table.add_column("Project", style="cyan bold")
     table.add_column("Total Time", style="green")
@@ -491,9 +492,9 @@ def format_projects_list(projects: List[Project]) -> str:
     footer_text = f"Total: [bold]{len(projects)}[/] projects, [bold]{total_sessions}[/] sessions, [bold green]{format_duration(total_time)}[/] worked"
     
     outer_group = Group(
-        Panel(Align.center(f"[bold green]{header_title}[/]"), border_style="green", box=ROUNDED),
+        Text.from_markup(f"[bold green]{header_title}[/]\\n"),
         table,
-        Panel(Text.from_markup(footer_text), border_style="green")
+        Text.from_markup("\\n" + footer_text)
     )
     
     return render_to_string(outer_group)
@@ -537,7 +538,8 @@ def format_detailed_sessions(sessions: List[Session]) -> str:
             session_group.append(Text("\nCommits in Session:"))
             session_group.append(commit_group)
             
-        group_elements.append(Panel(Group(*session_group), box=ROUNDED, border_style="blue"))
+        session_group.append(Text.from_markup("\\n[dim]" + "─" * 40 + "[/]"))
+        group_elements.append(Group(*session_group))
         
     return render_to_string(Group(*group_elements))
 
@@ -890,7 +892,19 @@ def format_insights_output(insights: Dict) -> str:
     from termstory.database import Database
     
     db = Database(get_db_path())
-    db.init_db()
+    import sqlite3
+    try:
+        db.init_db()
+    except sqlite3.DatabaseError as e:
+        if "malformed" in str(e).lower():
+            from rich.console import Console
+            import sys
+            Console(stderr=True).print(
+                "\n[bold red]Database Corrupted[/bold red]\n"
+                "Your TermStory database is corrupted. Please run `termstory reset` to fix it."
+            )
+            sys.exit(1)
+        raise
     
     start_ts = int((get_current_time() - timedelta(days=days)).timestamp())
     sessions = db.get_range_sessions(start_ts, int(get_current_time().timestamp()))

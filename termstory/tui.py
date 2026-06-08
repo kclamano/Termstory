@@ -747,6 +747,98 @@ def make_stacked_bar(project_seconds: Dict[str, int], total_seconds: int, width:
     return bar_str, "  ".join(legend_parts)
 
 
+class NarrativeText(Static):
+    """A Static widget that automatically reflows its text on resize, preserving ASCII hanging indents."""
+    
+    def __init__(self, raw_text: str, prefix: str = "", suffix: str = "", parse_markup: bool = False, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.raw_text = raw_text
+        self.prefix = prefix
+        self.suffix = suffix
+        self.parse_markup = parse_markup
+        self._last_width = None
+
+    def on_mount(self) -> None:
+        if self.size.width > 0:
+            self._update_wrapped()
+        else:
+            self._set_content(self.raw_text)
+
+    def on_resize(self, event) -> None:
+        if self._last_width != event.size.width:
+            self._last_width = event.size.width
+            self._update_wrapped()
+
+    def _set_content(self, text: str) -> None:
+        from rich.text import Text
+        full_text = self.prefix + text + self.suffix
+        if self.parse_markup:
+            try:
+                self.update(Text.from_markup(full_text))
+            except Exception:
+                self.update(Text(full_text))
+        else:
+            self.update(Text(full_text))
+
+    def _update_wrapped(self) -> None:
+        import textwrap
+        import re
+        
+        available_width = max(40, self.size.width - 2)
+        
+        wrapped_lines = []
+        for line in self.raw_text.splitlines():
+            if not line.strip():
+                wrapped_lines.append("")
+                continue
+                
+            clean_line = line.rstrip()
+            
+            match = re.match(r'^(\s*(?:├─|└─|├──|└──|│\s+|•|\*|-)\s*)(.*)', clean_line)
+            
+            emoji_match = False
+            indent = ""
+            content = clean_line
+            if not match:
+                clean_stripped = clean_line.strip()
+                if clean_line.startswith("   ") or clean_line.startswith("  "):
+                    indent = "   "
+                    content = clean_stripped
+                    emoji_match = True
+                elif any(clean_stripped.startswith(e) for e in ["🧠", "🌌", "🩸", "🛡️", "🤖", "🔒"]):
+                    indent = ""
+                    content = clean_line
+                    emoji_match = True
+            
+            if match:
+                indent = match.group(1)
+                content = match.group(2)
+                wrapped = textwrap.wrap(content, width=max(20, available_width - len(indent)))
+                if not wrapped:
+                    wrapped_lines.append(indent)
+                else:
+                    wrapped_lines.append(indent + wrapped[0])
+                    space_indent = " " * len(indent)
+                    for w in wrapped[1:]:
+                        wrapped_lines.append(space_indent + w)
+            elif emoji_match:
+                wrapped = textwrap.wrap(content, width=max(20, available_width - len(indent)))
+                if not wrapped:
+                    wrapped_lines.append(indent)
+                else:
+                    wrapped_lines.append(indent + wrapped[0])
+                    space_indent = " " * len(indent)
+                    for w in wrapped[1:]:
+                        wrapped_lines.append(space_indent + w)
+            else:
+                wrapped = textwrap.wrap(clean_line, width=available_width)
+                if not wrapped:
+                    wrapped_lines.append("")
+                else:
+                    wrapped_lines.extend(wrapped)
+                    
+        self._set_content("\n".join(wrapped_lines))
+
 class DetailsCanvas(VerticalScroll):
     """Display overall metrics, dynamic time distribution bar, and Git/Command details."""
     
@@ -773,9 +865,6 @@ class DetailsCanvas(VerticalScroll):
                 "  We couldn't find any shell history yet. Try running some terminal commands, or check your macOS Privacy permissions."
             )))
             return
-            
-        from rich.panel import Panel
-        
         total_time_seconds = sum(s.duration_seconds for s in sessions)
         total_time_str = format_duration(total_time_seconds)
         
@@ -855,7 +944,7 @@ class DetailsCanvas(VerticalScroll):
         
         if ai_enabled and provider != "disabled" and timeframe_id and timeframe_type in ("month", "date", "overall"):
             # A. Timeframe Summary Section
-            exec_widgets = [Static("[bold gold]━━━ AI Timeframe Summary ━━━[/bold gold]\n")]
+            exec_widgets = [Static("[bold yellow]━━━ AI Timeframe Summary ━━━[/bold yellow]\n")]
             
             stats_summary = compile_timeframe_stats_for_ai(sessions, projects)
             self.app._temp_stats_summary = stats_summary
@@ -1024,8 +1113,6 @@ class DetailsCanvas(VerticalScroll):
         
         self.mount(Static("\n".join(header_lines) + "\n\n", markup=True))
         
-        from rich.panel import Panel
-        
         def make_wrapped_bar(value: int, max_value: int, width: int = 25, color: str = "green") -> str:
             if max_value <= 0:
                 return "[dim]" + "░" * width + "[/]"
@@ -1078,13 +1165,10 @@ class DetailsCanvas(VerticalScroll):
         shortest_t = Text(f"└── 💥 Shortest Sprint:  `{shortest_branch}` (4 Hours)")
         matrix_text.append(shortest_t)
         
-        self.mount(Static(Panel(
-            matrix_text,
-            title="📊 THE MACRO CHURN MATRIX (Git Diff Analytics)",
-            title_align="left",
-            border_style="dim",
-            width=64
-        )))
+        matrix_container = Text()
+        matrix_container.append(Text.from_markup("[bold yellow]━━━ 📊 THE MACRO CHURN MATRIX (Git Diff Analytics) ━━━[/bold yellow]\n"))
+        matrix_container.append(matrix_text)
+        self.mount(Static(matrix_container))
         self.mount(Static("\n"))
         
         # 3. Time Sinks
@@ -1096,13 +1180,10 @@ class DetailsCanvas(VerticalScroll):
         sinks_text.append("\nACTIVE TOOLCHAIN FREQUENCY:\n")
         sinks_text.append(Text(f" {telemetry['tool_keywords_list']}"))
         
-        self.mount(Static(Panel(
-            sinks_text,
-            title="⏰ THE TIME SINKS (Top Editor Buffers & Tooling Frequency)",
-            title_align="left",
-            border_style="dim",
-            width=64
-        )))
+        sinks_container = Text()
+        sinks_container.append(Text.from_markup("[bold yellow]━━━ ⏰ THE TIME SINKS (Top Editor Buffers & Tooling Frequency) ━━━[/bold yellow]\n"))
+        sinks_container.append(sinks_text)
+        self.mount(Static(sinks_container))
         self.mount(Static("\n"))
         
         # 4. Terminal Combat
@@ -1112,13 +1193,10 @@ class DetailsCanvas(VerticalScroll):
         combat_text.append(f"✅ Green Executions:         {telemetry['passed_builds']:,} (Exit Status == 0)\n")
         combat_text.append(f"📈 Terminal Survival Rate:  {telemetry['success_rate']}%")
         
-        self.mount(Static(Panel(
-            combat_text,
-            title="⚔️ TERMINAL COMBAT DIAGNOSTICS (Shell History & Exit Codes)",
-            title_align="left",
-            border_style="dim",
-            width=64
-        )))
+        combat_container = Text()
+        combat_container.append(Text.from_markup("[bold yellow]━━━ ⚔️ TERMINAL COMBAT DIAGNOSTICS (Shell History & Exit Codes) ━━━[/bold yellow]\n"))
+        combat_container.append(combat_text)
+        self.mount(Static(combat_container))
         self.mount(Static("\n"))
         
         # 5. AI Behavioral Audit
@@ -1127,16 +1205,11 @@ class DetailsCanvas(VerticalScroll):
         timeframe_type = "overall" if timeframe_id == "overall" else "month"
         
         exec_widgets = []
+        exec_widgets.append(Static("[bold yellow]━━━ 🤖 AI CHRONICLER BEHAVIORAL AUDIT & PERCEPTIVE ROAST ━━━[/bold yellow]\n"))
+        
         if ai_enabled and provider != "disabled":
             if timeframe_id in getattr(self.app, "generating_reviews", set()):
-                panel = Panel(
-                    Text("⏳ Generating AI Behavioral Audit... please wait", style="italic yellow"),
-                    title="🤖 AI CHRONICLER BEHAVIORAL AUDIT & PERCEPTIVE ROAST",
-                    title_align="left",
-                    border_style="dim",
-                    width=64
-                )
-                exec_widgets.append(Static(panel))
+                exec_widgets.append(Static(Text("⏳ Generating AI Behavioral Audit... please wait", style="italic yellow")))
             else:
                 cached_exec = self.app.db.get_macro_summary(timeframe_id)
                 if cached_exec:
@@ -1147,30 +1220,7 @@ class DetailsCanvas(VerticalScroll):
                         audit_text = parts[0].strip()
                         verdict_text = parts[1].strip()
                         
-                    import textwrap
-                    wrapped_lines = []
-                    for line in audit_text.splitlines():
-                        if not line.strip():
-                            wrapped_lines.append("")
-                            continue
-                        clean_line = line.strip()
-                        indent = ""
-                        if line.startswith("   ") or line.startswith("  ") or not any(clean_line.startswith(e) for e in ["🧠", "🌌", "🩸", "🛡️", "🤖", "🔒"]):
-                            indent = "   "
-                        wrapped = textwrap.wrap(clean_line, width=60 - len(indent))
-                        for w_part in wrapped:
-                            wrapped_lines.append(indent + w_part)
-                            
-                    audit_panel_text = "\n".join(wrapped_lines)
-                    
-                    panel = Panel(
-                        Text(audit_panel_text),
-                        title="🤖 AI CHRONICLER BEHAVIORAL AUDIT & PERCEPTIVE ROAST",
-                        title_align="left",
-                        border_style="dim",
-                        width=64
-                    )
-                    exec_widgets.append(Static(panel))
+                    exec_widgets.append(NarrativeText(audit_text, parse_markup=False))
                     
                     if verdict_text:
                         v_lines = ["=" * 64]
@@ -1188,14 +1238,7 @@ class DetailsCanvas(VerticalScroll):
                     except Exception:
                         pass
                 else:
-                    panel = Panel(
-                        Text("Generate the AI chronicler's audit to unlock the roast.", style="dim"),
-                        title="🤖 AI CHRONICLER BEHAVIORAL AUDIT & PERCEPTIVE ROAST",
-                        title_align="left",
-                        border_style="dim",
-                        width=64
-                    )
-                    exec_widgets.append(Static(panel))
+                    exec_widgets.append(Static(Text("Generate the AI chronicler's audit to unlock the roast.", style="dim")))
                     
                     try:
                         btn = Button("✨ Generate Wrapped Audit", id=f"btn-exec-{timeframe_id}-{timeframe_type}")
@@ -1204,14 +1247,7 @@ class DetailsCanvas(VerticalScroll):
                     except Exception:
                         pass
         else:
-            panel = Panel(
-                Text("Offline / Local Only (AI is disabled).", style="dim"),
-                title="🤖 AI CHRONICLER BEHAVIORAL AUDIT & PERCEPTIVE ROAST",
-                title_align="left",
-                border_style="dim",
-                width=64
-            )
-            exec_widgets.append(Static(panel))
+            exec_widgets.append(Static(Text("Offline / Local Only (AI is disabled).", style="dim")))
             
             btn_configure = Button("⚙️ Configure AI")
             btn_configure.classes = "configure-ai-btn"
@@ -1287,13 +1323,13 @@ class DetailsCanvas(VerticalScroll):
         narrative_widgets = []
         
         if ai_enabled and provider != "disabled":
-            narrative_widgets.append(Static("[bold gold]━━━ AI Daily Chronicle ━━━[/bold gold]\n"))
+            narrative_widgets.append(Static("[bold yellow]━━━ AI Daily Chronicle ━━━[/bold yellow]\n"))
             if date_str in getattr(self.app, "generating_reviews", set()):
                 narrative_widgets.append(Static("⏳ [italic yellow]Generating Daily Chronicle... please wait[/italic yellow]\n"))
             else:
                 cached_story = self.app.db.get_macro_summary(date_str)
                 if cached_story:
-                    narrative_widgets.append(Static(Text(cached_story)))
+                    narrative_widgets.append(NarrativeText(cached_story, parse_markup=False))
                     
                     # Add a Regenerate button for the chronicle
                     btn_regen = Button("⟳ Regenerate Chronicle", id=f"btn-exec-{date_str}-date")
@@ -1455,22 +1491,29 @@ class DetailsCanvas(VerticalScroll):
         provider = self.app.config.get("active_provider", "disabled")
         
         # Display AI summary or dynamic button at the top of details
-        ai_widgets = [Static("[bold gold]Session Summary Story[/bold gold]")]
+        ai_widgets = [Static("[bold yellow]Session Summary Story[/bold yellow]")]
         if getattr(session, "is_generating_story", False):
             if session.ai_summary:
-                ai_widgets.append(Static(f"✨ {strip_ansi(session.ai_summary)}\n"))
+                ai_widgets.append(NarrativeText(strip_ansi(session.ai_summary), prefix="✨ ", suffix="\n", parse_markup=True))
             ai_widgets.append(Static("⏳ [italic yellow]Thinking...[/italic yellow]\n"))
         elif session.ai_summary:
-            ai_widgets.append(Static(f"✨ {strip_ansi(session.ai_summary)}\n"))
+            ai_widgets.append(NarrativeText(strip_ansi(session.ai_summary), prefix="✨ ", suffix="\n", parse_markup=True))
             if ai_enabled and provider != "disabled" and not getattr(session, "recent_generation", False):
                 btn = Button("⟳ Regenerate", id=f"btn-gen-session-{session.id}")
                 btn.classes = "gen-story-btn small-btn"
                 ai_widgets.append(btn)
+        elif getattr(session, "generation_failed", False):
+            ai_widgets.append(Static("[bold red]\\[ERR] AI summary unavailable. Displaying raw SQLite history.[/bold red]"))
+            ai_widgets.append(Static(f"{get_session_memory_str(session)}\n"))
+            btn = Button("⟳ Retry", id=f"btn-gen-session-{session.id}")
+            btn.classes = "gen-story-btn small-btn"
+            ai_widgets.append(btn)
         elif ai_enabled and provider != "disabled":
             btn = Button("✨ Generate Story", id=f"btn-gen-session-{session.id}")
             btn.classes = "gen-story-btn"
             ai_widgets.append(btn)
         else:
+            ai_widgets.append(Static("[bold red]\\[ERR] AI summary unavailable. Displaying raw SQLite history.[/bold red]"))
             ai_widgets.append(Static(f"{get_session_memory_str(session)}\n"))
         
         self.mount(Vertical(*ai_widgets, classes="session-ai-container"))
@@ -1675,7 +1718,7 @@ class TermStoryWorkspace(App):
     }
     #details-canvas Button {
         height: 3;
-        border: tall #3e3e4a;
+        border: solid #3e3e4a;
         background: #2a2a30;
         color: #e2e2e9;
         margin: 1 0;
@@ -1687,42 +1730,42 @@ class TermStoryWorkspace(App):
     #details-canvas Button:hover {
         background: #00bcd4;
         color: #121214;
-        border: tall #00ffff;
+        border: solid #00ffff;
     }
     #details-canvas Button:focus {
         background: #00bcd4;
         color: #121214;
-        border: tall #00ffff;
+        border: solid #00ffff;
     }
     #details-canvas .bulk-btn {
         background: #1a3a5c;
         color: #7dd3fc;
-        border: tall #0284c7;
+        border: solid #0284c7;
     }
     #details-canvas .bulk-btn:hover {
         background: #0284c7;
         color: white;
-        border: tall #38bdf8;
+        border: solid #38bdf8;
     }
     #details-canvas .exec-btn {
         background: #3d2800;
         color: #fbbf24;
-        border: tall #d97706;
+        border: solid #d97706;
     }
     #details-canvas .exec-btn:hover {
         background: #d97706;
         color: white;
-        border: tall #fbbf24;
+        border: solid #fbbf24;
     }
     #details-canvas .gen-story-btn {
         background: #1a2e1a;
         color: #86efac;
-        border: tall #22c55e;
+        border: solid #22c55e;
     }
     #details-canvas .gen-story-btn:hover {
         background: #22c55e;
         color: #121214;
-        border: tall #86efac;
+        border: solid #86efac;
     }
     #details-canvas .small-btn {
         height: 1;
@@ -1758,9 +1801,13 @@ class TermStoryWorkspace(App):
         width: 56;
         height: auto;
         padding: 2 4;
-        border: thick $error;
+        border: solid $error;
         background: #1a1a2e;
         text-align: center;
+    }
+    .copied-flash {
+        background: #0284c7;
+        color: white;
     }
     """
     
@@ -2026,6 +2073,7 @@ class TermStoryWorkspace(App):
             self.call_from_thread(self.update_session_ui, session.id, summary)
             self.call_from_thread(self.notify, "Story generated successfully!")
         else:
+            session.generation_failed = True
             from termstory.ai import get_last_ai_error
             err = get_last_ai_error()
             err_msg = f"Failed to generate story: {err}" if err else "Failed to generate story. Check AI config or logs."
@@ -2487,6 +2535,10 @@ class TermStoryWorkspace(App):
                 if sel:
                     self.copy_to_clipboard(sel[0])
                     self.notify("Copied selection to clipboard!")
+                    node.add_class("copied-flash")
+                    def remove_flash(n=node):
+                        n.remove_class("copied-flash")
+                    self.set_timer(0.4, remove_flash)
                     return
         self.notify("Nothing selected. (Pro-tip: Hold Option/Alt to copy with Cmd+C natively!)")
         
