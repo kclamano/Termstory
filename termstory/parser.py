@@ -260,28 +260,37 @@ def parse_zsh_history(
     n_chunks = (n_unresolvable + CHUNK_SIZE - 1) // CHUNK_SIZE if n_unresolvable > 0 else 0
     window = max(n_chunks * 86400, 365 * 86400)
 
+    last_snapped_base_ts = 0
+    current_snapped_base_ts = 0
+
     for idx, item in enumerate(unresolvable):
         chunk_idx = idx // CHUNK_SIZE
         intra_chunk_idx = idx % CHUNK_SIZE
 
-        fraction = chunk_idx / max(n_chunks, 1)
-        chunk_base_ts = int(anchor_time + fraction * window)
+        if intra_chunk_idx == 0:
+            fraction = chunk_idx / max(n_chunks, 1)
+            chunk_base_ts = int(anchor_time + fraction * window)
 
-        # Snap the base timestamp of the chunk to a valid working hour
-        dt = datetime.fromtimestamp(chunk_base_ts)
-        if dt.weekday() >= 5:  # Saturday or Sunday
-            dt += timedelta(days=(7 - dt.weekday()))
-            dt = dt.replace(hour=10, minute=0, second=0)
-        
-        if dt.hour < 9:
-            dt = dt.replace(hour=10, minute=0, second=0)
-        elif dt.hour >= 18:
-            dt = dt.replace(hour=16, minute=0, second=0)
+            dt = datetime.fromtimestamp(chunk_base_ts)
+            
+            if dt.hour < 9:
+                dt -= timedelta(days=1)
+                dt = dt.replace(hour=16, minute=0, second=0)
+            elif dt.hour >= 18:
+                dt = dt.replace(hour=16, minute=0, second=0)
+                
+            if dt.weekday() >= 5:
+                dt -= timedelta(days=(dt.weekday() - 4))
+                dt = dt.replace(hour=16, minute=0, second=0)
 
-        snapped_base_ts = int(dt.timestamp())
-        
-        # 10 seconds between commands within a chunk
-        fallback_ts = snapped_base_ts + (intra_chunk_idx * 10)
+            current_snapped_base_ts = int(dt.timestamp())
+            
+            if current_snapped_base_ts <= last_snapped_base_ts:
+                current_snapped_base_ts = last_snapped_base_ts + 3600
+                
+            last_snapped_base_ts = current_snapped_base_ts + (CHUNK_SIZE * 10)
+
+        fallback_ts = current_snapped_base_ts + (intra_chunk_idx * 10)
         resolved_ts = resolve_timestamp(item["command"], fallback_ts)
         resolved_commands.append(Command(
             timestamp=resolved_ts,
@@ -410,25 +419,37 @@ def parse_bash_history(
         window = max(n_chunks * 86400, 365 * 86400)
         start_time = mtime - window
         
+        last_snapped_base_ts = 0
+        current_snapped_base_ts = 0
+        
         for idx, (t, cmd) in enumerate(temp_commands):
             chunk_idx = idx // CHUNK_SIZE
             intra_chunk_idx = idx % CHUNK_SIZE
 
-            fraction = chunk_idx / max(n_chunks, 1)
-            chunk_base_ts = int(start_time + fraction * window)
+            if intra_chunk_idx == 0:
+                fraction = chunk_idx / max(n_chunks, 1)
+                chunk_base_ts = int(start_time + fraction * window)
 
-            dt = datetime.fromtimestamp(chunk_base_ts)
-            if dt.weekday() >= 5:
-                dt += timedelta(days=(7 - dt.weekday()))
-                dt = dt.replace(hour=10, minute=0, second=0)
-            
-            if dt.hour < 9:
-                dt = dt.replace(hour=10, minute=0, second=0)
-            elif dt.hour >= 18:
-                dt = dt.replace(hour=16, minute=0, second=0)
+                dt = datetime.fromtimestamp(chunk_base_ts)
+                
+                if dt.hour < 9:
+                    dt -= timedelta(days=1)
+                    dt = dt.replace(hour=16, minute=0, second=0)
+                elif dt.hour >= 18:
+                    dt = dt.replace(hour=16, minute=0, second=0)
+                    
+                if dt.weekday() >= 5:
+                    dt -= timedelta(days=(dt.weekday() - 4))
+                    dt = dt.replace(hour=16, minute=0, second=0)
 
-            snapped_base_ts = int(dt.timestamp())
-            fallback_ts = snapped_base_ts + (intra_chunk_idx * 10)
+                current_snapped_base_ts = int(dt.timestamp())
+                
+                if current_snapped_base_ts <= last_snapped_base_ts:
+                    current_snapped_base_ts = last_snapped_base_ts + 3600
+                    
+                last_snapped_base_ts = current_snapped_base_ts + (CHUNK_SIZE * 10)
+
+            fallback_ts = current_snapped_base_ts + (intra_chunk_idx * 10)
             resolved_ts = resolve_timestamp(cmd, fallback_ts)
             commands_to_return.append(Command(
                 timestamp=resolved_ts,
