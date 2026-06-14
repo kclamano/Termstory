@@ -43,6 +43,7 @@ def _make_bar(value: int, max_value: int, width: int = 40) -> str:
     return "█" * filled + " " * (width - filled)
 
 
+def render_timeline(db: Database, days: int = 30) -> str:
     """Render an ASCII timeline of the last *days* days.
 
     The function queries the database for sessions within the window, aggregates

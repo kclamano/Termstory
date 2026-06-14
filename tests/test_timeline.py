@@ -22,7 +22,7 @@ def test_cli_timeline_command(tmp_path, monkeypatch):
     # Initialise DB and insert data for three consecutive days
     db = Database(str(db_file))
     db.init_db()
-    now = datetime(2026, 6, 3, 12, 0, 0)
+    now = datetime.now()
     base_ts = int(now.timestamp())
     # Project
     project = Project(id=1, name="DemoProject", path="~/demo", first_seen=base_ts, last_seen=base_ts, session_count=2, total_time=300)
