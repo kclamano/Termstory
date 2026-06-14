@@ -7,6 +7,18 @@ from typing import List, Dict, Tuple, Optional, Any
 
 from rich.console import Group
 from rich.text import Text
+import textwrap
+import sys
+
+def _handle_exception(exc_type, exc, tb):
+    """Friendly global exception handler to avoid raw tracebacks."""
+    console = Console(stderr=True)
+    console.print("[bold red]An unexpected error occurred. Please try again.[/bold red]")
+    # Optionally log tb to a file for developers.
+    # For now we suppress the traceback.
+
+sys.excepthook = _handle_exception
+from rich.console import Console
 
 from textual import work
 from textual.app import App, ComposeResult
