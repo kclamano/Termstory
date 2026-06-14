@@ -780,6 +780,40 @@ def export_cmd(
         Console(stderr=True).print(f"[bold red]Error: Unsupported format '{format}'. Use 'json' or 'csv'.[/]")
         raise typer.Exit(code=1)
 
+@app.command("archive")
+def archive_cmd(
+    days: int = typer.Option(90, "--days", "-d", help="Archive sessions older than N days"),
+    archive_db: Optional[str] = typer.Option(None, "--archive-db", "-a", help="Path to the archive SQLite database file (defaults to archive.db next to the main database)"),
+):
+    """Archive old sessions and associated data (older than N days) to a separate database."""
+    db_path = get_db_path()
+    db = Database(db_path)
+    safe_init_db(db)
+    
+    # Run ingestion first to ensure all recent history is parsed/saved
+    run_ingestion(db)
+    
+    if not archive_db:
+        archive_db = os.path.join(os.path.dirname(db_path), "archive.db")
+    else:
+        archive_db = os.path.realpath(os.path.abspath(os.path.expanduser(archive_db)))
+        
+    console.print(f"Archiving data older than [bold]{days}[/] days...")
+    console.print(f"Main Database: [bold]{db_path}[/]")
+    console.print(f"Archive Database: [bold]{archive_db}[/]")
+    
+    from termstory.archive import archive_old_data
+    try:
+        stats = archive_old_data(db_path, archive_db, days)
+        console.print("[bold green]✅ Archiving completed successfully![/]")
+        console.print(f"  Sessions archived: [bold]{stats['sessions']}[/]")
+        console.print(f"  Commands archived: [bold]{stats['commands']}[/]")
+        console.print(f"  Commits archived: [bold]{stats['commits']}[/]")
+        console.print(f"  Macro summaries archived: [bold]{stats['macro_summaries']}[/]")
+    except Exception as e:
+        console.print(f"[bold red]Error during archiving: {e}[/]")
+        raise typer.Exit(code=1)
+
 @app.command("backup")
 def backup_cmd():
     """Create a timestamped backup of the TermStory database."""
