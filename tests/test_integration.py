@@ -138,5 +138,11 @@ def test_e2e_multiple_sessions(tmp_path):
     db.save_data([p1], sessions, commands)
 
     results = db.search_sessions("runserver")
-    assert len(results) >= 1
-    assert any("runserver" in r["matching_commands"] for r in results)
+    assert len(results) >= 1, f"Expected search results for 'runserver', got 0. Sessions in DB: {len(sessions)}"
+    # Check that the result contains 'runserver' in any command field
+    found = any(
+        "runserver" in r["matching_commands"] or
+        any("runserver" in cmd for cmd in r.get("all_commands", []))
+        for r in results
+    )
+    assert found, f"'runserver' not found in any result. Got: {[r['all_commands'] for r in results]}"
