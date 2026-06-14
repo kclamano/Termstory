@@ -977,6 +977,12 @@ def config_list():
         
     console.print(table)
 
+@app.command("obs")
+def obs():
+    """Toggle DeepWiki observability for Hermes (.env and config.yaml)"""
+    from termstory.hermes_obs import run_toggle
+    run_toggle()
+
 app.add_typer(config_app, name="config")
 
 
