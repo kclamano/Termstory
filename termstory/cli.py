@@ -802,6 +802,20 @@ def restore_cmd(backup_path: str = typer.Argument(..., help="Path to the backup 
 
 
 # ==========================================
+# TIMELINE COMMAND
+@app.command("timeline")
+def timeline_cmd(
+    days: int = typer.Option(30, "--days", help="Number of days to include in the timeline")
+) -> None:
+    """Render an ASCII visual timeline of activity over recent days"""
+    db_path = get_db_path()
+    db = Database(db_path)
+    safe_init_db(db)
+    run_ingestion(db)
+    from termstory.timeline import render_timeline
+    output = render_timeline(db, days=days)
+    console.print(output)
+
 # CONFIG SUBCOMMANDS
 # ==========================================
 
