@@ -2,7 +2,6 @@ import os
 import typer
 from typing import Optional
 from dateutil import parser as date_parser
-from datetime import timedelta
 
 from termstory.config import get_history_files, get_db_path
 from termstory.parser import parse_all_histories

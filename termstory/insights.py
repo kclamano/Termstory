@@ -1,7 +1,7 @@
 from datetime import datetime
 from collections import defaultdict
-from typing import List, Dict, Tuple, Any
-from termstory.models import Session, Project, Command, format_duration
+from typing import List, Tuple
+from termstory.models import Session, Project, format_duration
 from termstory.formatter import classify_command, DISPLAY_NAMES
 
 def calculate_time_distribution(sessions: List[Session], projects: List[Project]) -> List[Tuple[str, float, int]]:

@@ -3,7 +3,7 @@ import re
 import shlex
 import calendar
 from collections import Counter, defaultdict
-from datetime import datetime, timedelta, time
+from datetime import datetime, timedelta
 from typing import List, Dict, Tuple, Optional, Any
 
 from termstory.models import Session, Project, Command, format_duration
@@ -12,10 +12,8 @@ from termstory.project import disambiguate_project_names
 
 from rich.console import Console, Group
 from rich.table import Table
-from rich.align import Align
-from rich.rule import Rule
 from rich.text import Text
-from rich.box import MINIMAL, SIMPLE
+from rich.box import SIMPLE
 
 DISPLAY_NAMES = {
     "git": "Git",

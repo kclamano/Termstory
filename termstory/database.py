@@ -1,6 +1,6 @@
 import sqlite3
-from datetime import datetime, time
-from typing import List, Dict, Optional, Set, Tuple
+from datetime import datetime
+from typing import List, Dict, Optional
 from termstory.models import Command, Session, Project
 
 class Database:

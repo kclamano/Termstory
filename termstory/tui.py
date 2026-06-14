@@ -7,17 +7,15 @@ from typing import List, Dict, Tuple, Optional, Any
 
 from rich.console import Group
 from rich.text import Text
-from rich.table import Table
 
 from textual import work
 from textual.app import App, ComposeResult
 from textual.containers import Grid, Horizontal, Vertical, VerticalScroll
-from textual.widgets import Header, Footer, Tree, Static, Input, Button
+from textual.widgets import Footer, Tree, Static, Input, Button
 from textual.screen import ModalScreen
-from textual.reactive import reactive
 from textual.binding import Binding
 
-from termstory.models import Session, Project, Command, format_duration
+from termstory.models import Session, Project, format_duration
 from termstory.database import Database
 from termstory.project import disambiguate_project_names
 from termstory.formatter import _is_noise_command, clean_command_to_memory, generate_daily_activity_punch_card, get_operator_handle, get_github_avatar_ascii

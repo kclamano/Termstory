@@ -387,7 +387,6 @@ def generate_daily_chronicle_prompt(
     from datetime import datetime
     from termstory.models import format_duration
     from termstory.formatter import _is_noise_command
-    from collections import defaultdict
     
     # Load template reference
     example_text = ""
