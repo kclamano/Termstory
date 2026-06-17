@@ -18,8 +18,9 @@ pip install termstory
 pip uninstall termstory -y 2>/dev/null
 pip3 uninstall termstory -y 2>/dev/null
 python3 -m pip uninstall termstory -y 2>/dev/null
-rm -rf ~/.termstory ~/Library/Python/*/site-packages/termstory*
-echo "Termstory removed"
+rm -rf ~/.termstory
+pip cache purge 2>/dev/null
+echo "Termstory removed. If still found, run: which termstory && rm \$(which termstory)"
 ```
 Removes the package and all stored data (history, summaries, config).
 
