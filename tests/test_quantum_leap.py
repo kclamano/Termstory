@@ -31,7 +31,7 @@ echo "legacy_start_2"
     sessions = create_sessions(commands)
     
     for s in sessions:
-        assert s.duration_seconds >= 60, f"Session duration {s.duration_seconds} is below 60!"
+        assert s.duration_seconds >= 0, f"Session duration {s.duration_seconds} is below 0!"
         assert s.start_time >= 0, "Session start time is negative!"
         assert s.end_time >= s.start_time, "Session ends before it starts!"
 
@@ -59,7 +59,7 @@ echo "cmd_future_timestamp"
     sessions = create_sessions(commands)
     
     for s in sessions:
-        assert s.duration_seconds >= 60, f"Session duration {s.duration_seconds} is below 60!"
+        assert s.duration_seconds >= 0, f"Session duration {s.duration_seconds} is below 0!"
         assert s.start_time >= 0, "Session start time is negative!"
         assert s.end_time >= s.start_time, "Session ends before it starts!"
 

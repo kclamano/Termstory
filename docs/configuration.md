@@ -1,0 +1,44 @@
+## 16. Configuration
+
+Config lives at `~/.termstory/config.json`:
+
+```json
+{
+    "ai_enabled": true,
+    "active_provider": "groq",
+    "request_timeout_seconds": 30,
+    "has_seen_onboarding": true,
+    "providers": {
+        "groq": {
+            "api_key": "gsk_...",
+            "api_base_url": "https://api.groq.com/openai/v1",
+            "model_name": "llama-3.1-8b-instant"
+        },
+        "openai": {
+            "api_key": "sk-proj-...",
+            "api_base_url": "https://api.openai.com/v1",
+            "model_name": "gpt-4o-mini"
+        },
+        "ollama": {
+            "api_key": "",
+            "api_base_url": "http://localhost:11434/v1",
+            "model_name": "llama3"
+        },
+        "custom": {
+            "api_key": "",
+            "api_base_url": "http://localhost:8080/v1",
+            "model_name": "my-model"
+        }
+    }
+}
+```
+
+All settings are editable via `termstory config set <dot.path> <value>`.
+
+Key configuration parameters:
+- `ai_enabled` (bool): Toggle AI summaries on/off.
+- `active_provider` (string): Set to `"groq"`, `"openai"`, `"ollama"`, `"custom"`, or `"disabled"`.
+- `request_timeout_seconds` (int): HTTP request timeout (in seconds) for LLM API calls. Defaults to `30`.
+- `providers.<name>.<param>`: Provider-specific endpoints, API keys, and model names.
+
+---

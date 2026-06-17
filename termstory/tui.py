@@ -2258,7 +2258,11 @@ class TermStoryWorkspace(App):
             else:
                 ai_status = f"[bold cyan]AI: ACTIVE ({provider.upper()})[/bold cyan]"
                 
-        self.query_one("#stats-panel").update_stats(stats, ai_status=ai_status, days_limit=self.days_limit)
+        try:
+            from textual.css.query import NoMatches
+            self.query_one("#stats-panel").update_stats(stats, ai_status=ai_status, days_limit=self.days_limit)
+        except NoMatches:
+            pass
 
     def update_session_ui(self, session_id: int, new_summary: str, skip_canvas_refresh: bool = False) -> None:
         """Update tree node label and refresh details canvas if necessary. Safe to run on main thread."""
