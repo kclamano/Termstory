@@ -12,6 +12,13 @@ curl -fsSL https://raw.githubusercontent.com/bitflicker64/Termstory/main/install
 pip install termstory
 ```
 
+## Uninstall
+
+```bash
+pip uninstall termstory -y && rm -rf ~/.termstory
+```
+Removes the package and all stored data (history, summaries, config).
+
 
 [![PyPI version](https://img.shields.io/pypi/v/termstory.svg)](https://pypi.org/project/termstory/)
 [![CI](https://github.com/bitflicker64/Termstory/actions/workflows/ci.yml/badge.svg)](https://github.com/bitflicker64/Termstory/actions/workflows/ci.yml)
