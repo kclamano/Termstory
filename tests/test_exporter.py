@@ -182,7 +182,7 @@ def test_cli_export_command(tmp_path, monkeypatch):
     s = Session(id=1, start_time=2000, end_time=2000, duration_seconds=100, project_id=1, commands=[cmd])
     db.save_data([p], [s], [cmd])
     
-    runner = CliRunner(mix_stderr=False)
+    runner = CliRunner()
     
     # Test JSON stdout export
     result = runner.invoke(app, ["export", "--format", "json"])
@@ -213,11 +213,17 @@ def test_cli_export_command(tmp_path, monkeypatch):
     # Test filter matching nothing
     result_empty = runner.invoke(app, ["export", "--project", "non-existent"])
     assert result_empty.exit_code == 0
-    empty_out = (result_empty.stderr or "") + result_empty.stdout
+    try:
+        empty_out = result_empty.stderr + result_empty.stdout
+    except ValueError:
+        empty_out = result_empty.stdout
     assert "No sessions found matching filters" in empty_out
     
     # Test invalid format
     result_invalid = runner.invoke(app, ["export", "--format", "xml"])
     assert result_invalid.exit_code == 1
-    invalid_out = (result_invalid.stderr or "") + result_invalid.stdout
+    try:
+        invalid_out = result_invalid.stderr + result_invalid.stdout
+    except ValueError:
+        invalid_out = result_invalid.stdout
     assert "Error: Unsupported format" in invalid_out

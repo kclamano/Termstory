@@ -12,7 +12,6 @@ DB_PATH = "test_stress.db"
 def writer_worker(worker_id, num_sessions=2, commands_per_session=20):
     """Write ~40 commands per worker (2 sessions x 20 commands)"""
     db = Database(DB_PATH)
-    db.init_db()
     
     base_time = int(time.time()) - 86400 * 30  # 30 days ago
     
@@ -97,6 +96,10 @@ def reader_worker(worker_id, num_queries=100):
 def test_stress():
     if os.path.exists(DB_PATH):
         os.remove(DB_PATH)
+    
+    # Initialize the database on the main thread first
+    db = Database(DB_PATH)
+    db.init_db()
     
     print("Starting stress test: 5 writers x 25 sessions x 80 commands = 10,000 commands")
     print("Plus 3 concurrent readers...")
