@@ -13,7 +13,11 @@ import sys
 def _handle_exception(exc_type, exc, tb):
     """Friendly global exception handler to avoid raw tracebacks."""
     import traceback
-    from textual.markup import escape
+
+    def _safe_str(value):
+        """Escape Rich markup characters without depending on Textual."""
+        return str(value).replace("[", "\\[").replace("]", "\\]")
+
     console = Console(stderr=True)
     console.print("[bold red]An unexpected error occurred. Please try again.[/bold red]")
     log_path = os.path.expanduser("~/.termstory.error.log")
@@ -23,8 +27,8 @@ def _handle_exception(exc_type, exc, tb):
             traceback.print_exception(exc_type, exc, tb, file=f)
     except Exception as log_exc:
         console.print(
-            f"[yellow]Warning: could not write error log to {escape(str(log_path))}: "
-            f"{type(log_exc).__name__}: {escape(str(log_exc))}[/yellow]"
+            f"[yellow]Warning: could not write error log to {_safe_str(log_path)}: "
+            f"{type(log_exc).__name__}: {_safe_str(log_exc)}[/yellow]"
         )
 
 sys.excepthook = _handle_exception
