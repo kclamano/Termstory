@@ -206,3 +206,29 @@ def test_add_reminder_explicit_days_prefix_suffix_stripping(tmp_path, monkeypatc
     
     rem3 = add_reminder("deploy application in 3 days", days=10)
     assert rem3["about"] == "deploy application"
+
+
+def test_add_reminder_days_validation(tmp_path, monkeypatch):
+    reminders_file = tmp_path / "reminders.json"
+    monkeypatch.setattr("termstory.reminder.get_reminders_file_path", lambda: str(reminders_file))
+    
+    # Test invalid types
+    with pytest.raises(TypeError, match="Days must be an integer."):
+        add_reminder("do something", days=2.5)
+    
+    with pytest.raises(TypeError, match="Days must be an integer."):
+        add_reminder("do something", days="5")
+
+    with pytest.raises(TypeError, match="Days must be an integer."):
+        add_reminder("do something", days=True)
+
+    # Test invalid boundary values
+    with pytest.raises(ValueError, match="Days must be between 0 and 3650."):
+        add_reminder("do something", days=-1)
+    
+    with pytest.raises(ValueError, match="Days must be between 0 and 3650."):
+        add_reminder("do something", days=3651)
+
+     # Test parsed phrase that yields an invalid range
+    with pytest.raises(ValueError, match="Days must be between 0 and 3650."):
+        add_reminder("do something in 4000 days")

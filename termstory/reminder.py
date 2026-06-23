@@ -74,8 +74,11 @@ def add_reminder(
     else:
         about, days = parse_reminder_text(text)
         
-    if days < 0:
-        raise ValueError("Days must be a non-negative integer.")
+    if type(days) is not int:
+        raise TypeError("Days must be an integer.")
+
+    if not 0 <= days <= 3650:
+        raise ValueError("Days must be between 0 and 3650.")
 
     created_at = int(time.time())
     due_at = created_at + (days * 86400)
