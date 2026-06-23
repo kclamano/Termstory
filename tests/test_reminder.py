@@ -77,6 +77,39 @@ def test_add_and_complete_reminder(tmp_path, monkeypatch):
     # Try completing non-existent
     assert complete_reminder(999) is False
 
+def test_add_reminder_logs_warning_on_db_error(tmp_path, monkeypatch, caplog):
+    """When the DB lookup raises, the reminder is still saved with defaults
+    and a warning is logged. Regression test for issue #111."""
+    reminders_file = tmp_path / "reminders.json"
+    monkeypatch.setattr("termstory.reminder.get_reminders_file_path", lambda: str(reminders_file))
+
+    class BrokenCursor:
+        def execute(self, *args, **kwargs):
+            raise RuntimeError("simulated DB failure")
+
+    class BrokenConn:
+        def cursor(self):
+            return BrokenCursor()
+        def close(self):
+            pass
+
+    class BrokenDB:
+        def get_connection(self):
+            return BrokenConn()
+
+    with caplog.at_level("WARNING", logger="termstory.reminder"):
+        rem = add_reminder("review code in 2 days", db=BrokenDB())
+
+    # Reminder is still created with default fallback values
+    assert rem["about"] == "review code"
+    assert rem["days"] == 2
+    assert rem["session_id"] is None
+    assert rem["project_name"] == "Other"
+
+    # Warning was emitted with the simulated error context
+    assert any("add_reminder" in r.message and "simulated DB failure" in r.message
+               for r in caplog.records)
+
 def test_cli_remind_commands(tmp_path, monkeypatch):
     reminders_file = tmp_path / "reminders.json"
     monkeypatch.setattr("termstory.reminder.get_reminders_file_path", lambda: str(reminders_file))

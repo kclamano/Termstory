@@ -1,9 +1,12 @@
 import json
+import logging
 import os
 import time
 import re
 from typing import List, Dict, Optional, Tuple
 from termstory.config import get_app_dir
+
+logger = logging.getLogger(__name__)
 
 def get_reminders_file_path() -> str:
     """Return path to reminders JSON file"""
@@ -96,8 +99,12 @@ def add_reminder(
             if row:
                 session_id = row[0]
                 project_name = row[1] or "Other"
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning(
+                "add_reminder: failed to fetch latest session from DB; "
+                "reminder will be created without project association. Error: %s",
+                exc,
+            )
         finally:
             conn.close()
 
