@@ -171,7 +171,13 @@ def load_config() -> dict:
             with open(config_path, "r", encoding="utf-8") as f:
                 config = json.load(f)
 
-        except (json.JSONDecodeError, UnicodeDecodeError) as e:
+        except (
+            json.JSONDecodeError,
+            UnicodeDecodeError,
+            OSError,
+            ValueError,
+            RecursionError,
+        ) as e:
             print(
                 f"Warning: config file '{config_path}' contains invalid data and will be ignored ({e}).",
                 file=sys.stderr,
