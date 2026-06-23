@@ -13,6 +13,7 @@ import sys
 def _handle_exception(exc_type, exc, tb):
     """Friendly global exception handler to avoid raw tracebacks."""
     import traceback
+    from textual.markup import escape
     console = Console(stderr=True)
     console.print("[bold red]An unexpected error occurred. Please try again.[/bold red]")
     log_path = os.path.expanduser("~/.termstory.error.log")
