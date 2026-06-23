@@ -23,7 +23,7 @@ def _handle_exception(exc_type, exc, tb):
     except Exception as log_exc:
         console.print(
             f"[yellow]Warning: could not write error log to {log_path}: "
-            f"{type(log_exc).__name__}: {log_exc}[/yellow]"
+            f"{type(log_exc).__name__}: {escape(str(log_exc))}[/yellow]"
         )
 
 sys.excepthook = _handle_exception
