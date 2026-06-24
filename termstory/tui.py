@@ -401,10 +401,10 @@ class HelpScreen(ModalScreen[None]):
         
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "btn-close-help":
-            self.dismiss()
+            self.call_after_refresh(self.dismiss)
             
     def action_dismiss_none(self) -> None:
-        self.dismiss()
+        self.call_after_refresh(self.dismiss)
 
 
 class OnboardingScreen(ModalScreen[dict]):
@@ -531,10 +531,10 @@ class OnboardingScreen(ModalScreen[dict]):
         self.config["ai_enabled"] = False
         self.config["active_provider"] = "disabled"
         self.config["has_seen_onboarding"] = True
-        self.dismiss(self.config)
+        self.call_after_refresh(self.dismiss, self.config)
         
     def action_dismiss_none(self) -> None:
-        self.dismiss(None)
+        self.call_after_refresh(self.dismiss, None)
         
     def on_button_pressed(self, event: Button.Pressed) -> None:
         button_id = event.button.id
@@ -592,14 +592,14 @@ class OnboardingScreen(ModalScreen[dict]):
             self.config["active_provider"] = self.selected_provider
             self.config["has_seen_onboarding"] = True
             
-            self.dismiss(self.config)
+            self.call_after_refresh(self.dismiss, self.config)
         elif button_id == "btn-disable-ai":
             github_username = self.query_one("#input-github-username").value.strip().lstrip('@')
             self.config["github_username"] = github_username
             self.config["ai_enabled"] = False
             self.config["active_provider"] = "disabled"
             self.config["has_seen_onboarding"] = True
-            self.dismiss(self.config)
+            self.call_after_refresh(self.dismiss, self.config)
 
 
 
@@ -1624,10 +1624,10 @@ class ResetConfirmScreen(ModalScreen):
         )
     
     def action_confirm_reset(self) -> None:
-        self.dismiss(True)
+        self.call_after_refresh(self.dismiss, True)
     
     def action_cancel_reset(self) -> None:
-        self.dismiss(False)
+        self.call_after_refresh(self.dismiss, False)
 
 
 class MatrixDefragScreen(ModalScreen[None]):
