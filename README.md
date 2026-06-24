@@ -46,7 +46,7 @@ termstory search auth
 
 ## TUI Dashboard
 
-![TermStory TUI Dashboard](docs/assets/tui-dashboard.png)
+![TermStory TUI Dashboard](https://raw.githubusercontent.com/bitflicker64/termstory/main/docs/assets/tui-dashboard.png)
 
 *TermStory v0.6.0 — AI-narrated daily chronicle, project timeline, focus metrics, and command playback.*
 
