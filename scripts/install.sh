@@ -20,10 +20,23 @@ fi
 echo "  Python: $($PYTHON --version)"
 echo "  pip:    $($PYTHON -m pip --version 2>&1 | awk '{print $1, $2}')"
 
+# ── Global state ──────────────────────────────────────────────────────────────
+# The EXIT trap reads this to restore a stranded backup if the script is
+# interrupted mid-install (SIGTERM, SIGINT, unchecked error).
+_BACKUP_DIR=""
+_SRC_DIR=""
+
 # ── Download & extract ─────────────────────────────────────────────────────────
 WORK_DIR=$(mktemp -d)
 
-cleanup() { rm -rf "$WORK_DIR"; }
+cleanup() {
+  # Restore stranded venv backup if script was aborted mid-install
+  if [ -n "$_BACKUP_DIR" ] && [ -d "$_BACKUP_DIR" ]; then
+    [ -d "$_BACKUP_DIR/termstory-venv" ] && mv "$_BACKUP_DIR/termstory-venv" "$HOME/.termstory-venv" 2>/dev/null
+    rm -rf "$_BACKUP_DIR"
+  fi
+  rm -rf "${WORK_DIR:-}"
+}
 trap cleanup EXIT
 
 echo "  Downloading TermStory..."
@@ -56,10 +69,13 @@ install_venv() {
 
   # Back up any existing venv so we can roll back on failure.
   # backup_dir holds the moved venv at "$backup_dir/termstory-venv".
+  # Register cleanup so an interrupted/aborted script doesn't strand it.
   local backup_dir=""
   if [ -d "$venv" ]; then
     backup_dir=$(mktemp -d)
     mv "$venv" "$backup_dir/termstory-venv"
+    # Register with global EXIT trap — restores on abort/interrupt
+    _BACKUP_DIR="$backup_dir"
   fi
 
   # Inline rollback helper — bash does not support true nested functions;
@@ -91,7 +107,7 @@ install_venv() {
   fi
 
   # Success — discard backup
-  [ -n "$backup_dir" ] && rm -rf "$backup_dir"
+  [ -n "$backup_dir" ] && rm -rf "$backup_dir" && _BACKUP_DIR=""
 
   echo ""
   echo "  ✅ Installed in virtualenv."
@@ -122,8 +138,17 @@ install_user() {
     return 1
   fi
 
-  if ! "$PYTHON" -c "import termstory" 2>/dev/null; then
-    echo "  Package not importable after user install."
+  # Verify the imported module is actually from this install target,
+  # not a stale system or site-packages copy.
+  if ! "$PYTHON" -c "
+import sys, os, site
+user_site = site.getusersitepackages()
+import termstory
+fp = os.path.realpath(termstory.__file__)
+if not fp.startswith(os.path.realpath(user_site)):
+    sys.exit(1)
+" 2>/dev/null; then
+    echo "  Package not importable from user site-packages after install."
     return 1
   fi
 
