@@ -88,8 +88,23 @@ We welcome contributions! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guid
 
 ## Uninstall
 
+Use the dedicated uninstaller script — it removes the venv, data directory, and the PATH line that the installer added to your shell RC file:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/bitflicker64/Termstory/main/scripts/uninstall.sh | bash -s -- --yes
+```
+
+Or run locally:
+
+```bash
+bash scripts/uninstall.sh --yes
+```
+
+Or uninstall by hand (a subset of what the script does):
+
 ```bash
 pip uninstall termstory -y 2>/dev/null
+rm -rf ~/.termstory-venv
 rm -rf ~/.termstory
 ```
 
