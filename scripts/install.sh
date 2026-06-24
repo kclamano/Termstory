@@ -70,28 +70,40 @@ RC_MARKER="# Added by termstory installer"
 RC_EXPORT_LINE='export PATH="$HOME/.termstory-venv/bin:$PATH"'
 RC_FULL_BLOCK="${RC_MARKER}${RC_EXPORT_LINE}"
 
-# Returns 0 if the export AND its marker both appear in this file.
+# Returns 0 if the export AND its marker both appear in this file as
+# an adjacent block (marker immediately followed by the export line).
 rc_has_export() {
   local rc="$1"
   [ -f "$rc" ] || return 1
-  grep -Fqx "$RC_MARKER" "$rc" && grep -Fqx "$RC_EXPORT_LINE" "$rc"
+  awk -v marker="$RC_MARKER" -v export_line="$RC_EXPORT_LINE" '
+    BEGIN { prev_marker = 0 }
+    prev_marker == 1 && $0 == export_line { found = 1; exit }
+    { prev_marker = ($0 == marker ? 1 : 0) }
+    END { exit (found ? 0 : 1) }
+  ' "$rc"
 }
 
 # Pick the candidate RC file for the active shell, in order of preference.
-# Args: current_rc (set by caller), ordered list of candidate paths.
+# Always returns a target path (creating it if absent for the fresh-shell case)
+# so the prompt can offer to bring up a brand new RC file when the user wants one.
 rc_target_for_install() {
   local shell_name
   shell_name="${SHELL##*/}"
 
   case "$shell_name" in
     zsh)
-      [ -f "$HOME/.zshrc" ] && echo "$HOME/.zshrc" && return 0
+      echo "$HOME/.zshrc"
+      return 0
       ;;
     bash)
-      # On macOS the user typically sources .bash_profile, not .bashrc.
-      # If .bashrc exists we prefer it for login shells too.
-      [ -f "$HOME/.bashrc" ] && echo "$HOME/.bashrc" && return 0
-      [ -f "$HOME/.bash_profile" ] && echo "$HOME/.bash_profile" && return 0
+      # Prefer .bashrc if it exists; fall back to .bash_profile for macOS.
+      # If neither exists yet, surface .bashrc — it's the modern choice.
+      if [ -f "$HOME/.bashrc" ] || ! [ -f "$HOME/.bash_profile" ]; then
+        echo "$HOME/.bashrc"
+      else
+        echo "$HOME/.bash_profile"
+      fi
+      return 0
       ;;
   esac
   return 1
@@ -110,14 +122,37 @@ rc_append_export() {
   } >> "$rc"
 }
 
+# Print manual PATH instructions. Used whenever we can't prompt the user
+# (non-TTY, fresh-shell case where the user declined, etc.).
+print_manual_path_instructions() {
+  local target="${1:-}"
+  echo ""
+  echo "  For permanent access, add this to your shell RC file:"
+  echo ""
+  echo "    # Added by termstory installer"
+  echo '    export PATH="$HOME/.termstory-venv/bin:$PATH"'
+  if [ -n "$target" ]; then
+    echo ""
+    echo "  Recommended file: $target"
+  fi
+  echo ""
+  echo "  Run right now (no shell restart needed):"
+  echo '    $HOME/.termstory-venv/bin/termstory today'
+}
+
 offer_path_export() {
-  # Skip if running in a non-interactive context.
-  if ! [ -t 0 ]; then
+  # If neither stdin nor /dev/tty is interactive, just print manual steps.
+  # We check /dev/tty because piped curls and similar redirect stdin but
+  # /dev/tty is still the controlling terminal — that's the only way to
+  # read user input reliably.
+  if ! [ -t 0 ] && ! [ -r /dev/tty ]; then
+    print_manual_path_instructions
     return 0
   fi
 
   local target
   if ! target=$(rc_target_for_install); then
+    print_manual_path_instructions
     return 0
   fi
 
@@ -126,23 +161,45 @@ offer_path_export() {
     return 0
   fi
 
-  echo ""
-  printf '  Add export PATH="$HOME/.termstory-venv/bin:$PATH" to %s? [y/N] ' "$(basename "$target")"
-  local reply
-  # Read from /dev/tty so this works even when stdin was redirected.
-  read -r reply </dev/tty 2>/dev/null || reply=""
-  case "$reply" in
-    [Yy]|[Yy][Ee][Ss])
-      rc_append_export "$target"
-      echo "  ✅ Appended to $target"
-      echo "     Activate now:  source $target"
-      ;;
-    *)
-      echo "  Manual setup:"
-      echo "    $target (or ~/.bashrc / ~/.zshrc on different shells)"
-      echo "    $RC_EXPORT_LINE"
-      ;;
-  esac
+  # If the RC file doesn't exist yet, confirm with the user before creating it
+  # — we never auto-modify dotfiles without consent.
+  if [ ! -f "$target" ]; then
+    echo ""
+    printf '  Create %s with the termstory PATH export? [y/N] ' "$(basename "$target")"
+    local reply
+    read -r reply </dev/tty 2>/dev/null || reply=""
+    case "$reply" in
+      [Yy]|[Yy][Ee][Ss])
+        : # fall through to append below
+        ;;
+      *)
+        print_manual_path_instructions "$target"
+        return 0
+        ;;
+    esac
+  else
+    echo ""
+    printf '  Add export PATH="$HOME/.termstory-venv/bin:$PATH" to %s? [y/N] ' "$(basename "$target")"
+    local reply
+    read -r reply </dev/tty 2>/dev/null || reply=""
+    case "$reply" in
+      [Yy]|[Yy][Ee][Ss])
+        : # fall through
+        ;;
+      *)
+        echo ""
+        echo "  Manual setup:"
+        echo "    Append to $target:"
+        echo "    $RC_MARKER"
+        echo "    $RC_EXPORT_LINE"
+        return 0
+        ;;
+    esac
+  fi
+
+  rc_append_export "$target"
+  echo "  ✅ Appended to $target"
+  echo "     Activate now:  source $target"
 }
 
 # ── Install strategies ─────────────────────────────────────────────────────────
