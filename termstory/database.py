@@ -513,11 +513,12 @@ class Database:
                         # conflict-recovery branch the dict missed (different
                         # project_id on the existing row vs the incoming one),
                         # so we must apply the same UPDATE here or the session
-                        # keeps stale end_time/duration.
+                        # keeps stale metadata.
                         cursor.execute(
-                            "UPDATE sessions SET end_time = ?, duration_seconds = ? "
-                            "WHERE id = ?",
-                            (session.end_time, session.duration_seconds, db_id),
+                            "UPDATE sessions SET end_time = ?, duration_seconds = ?, "
+                            "project_id = ?, tags = ? WHERE id = ?",
+                            (session.end_time, session.duration_seconds,
+                             session.project_id, session.tags, db_id),
                         )
                     session.id = db_id
                     
