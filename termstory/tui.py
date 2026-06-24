@@ -1633,9 +1633,12 @@ class ResetConfirmScreen(ModalScreen):
 class MatrixDefragScreen(ModalScreen[None]):
     """Cyberpunk Matrix Defrag animation overlay."""
     BINDINGS = [
-        Binding("escape", "dismiss", "Close", show=True),
-        Binding("q", "dismiss", "Close", show=True),
+        Binding("escape", "close_matrix", "Close", show=True),
+        Binding("q", "close_matrix", "Close", show=True),
     ]
+
+    def action_close_matrix(self) -> None:
+        self.call_after_refresh(self.dismiss)
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -1715,15 +1718,18 @@ class MatrixDefragScreen(ModalScreen[None]):
             self.update_grid()
             if self.animation_timer:
                 self.animation_timer.stop()
-            self.set_timer(0.8, self.dismiss)
+            self.set_timer(0.8, lambda: self.call_after_refresh(self.dismiss))
 
 
 class GhostTyperScreen(ModalScreen[None]):
     """Cyberpunk Ghost Typer playback simulator."""
     BINDINGS = [
-        Binding("escape", "dismiss", "Stop Playback", show=True),
-        Binding("q", "dismiss", "Stop Playback", show=True),
+        Binding("escape", "close_typing", "Stop Playback", show=True),
+        Binding("q", "close_typing", "Stop Playback", show=True),
     ]
+
+    def action_close_typing(self) -> None:
+        self.call_after_refresh(self.dismiss)
     
     def __init__(self, commands: List[str], *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -1745,7 +1751,7 @@ class GhostTyperScreen(ModalScreen[None]):
     def on_mount(self) -> None:
         if not self.commands:
             self.query_one("#ghost-console").update("No commands available for playback.")
-            self.set_timer(1.2, self.dismiss)
+            self.set_timer(1.2, lambda: self.call_after_refresh(self.dismiss))
             return
         self.start_typing_next_command()
         
@@ -1753,7 +1759,7 @@ class GhostTyperScreen(ModalScreen[None]):
         if self.current_cmd_idx >= len(self.commands):
             self.lines.append("\n[bold green]>> PLAYBACK COMPLETE.[/bold green]")
             self.update_console()
-            self.set_timer(1.0, self.dismiss)
+            self.set_timer(1.0, lambda: self.call_after_refresh(self.dismiss))
             return
             
         self.current_char_idx = 0
