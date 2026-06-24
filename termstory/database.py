@@ -1237,6 +1237,36 @@ class Database:
         if not any('FTS5' in opt for opt in options):
             return
 
+        # FTS5 migration: older DBs may have drifted FTS column sets (e.g. sessions_fts
+        # used to have [content, session_id, project_id, timestamp]; current schema is
+        # [ai_summary]). CREATE VIRTUAL TABLE IF NOT EXISTS leaves drifted tables intact,
+        # so triggers/INSERTs hit "no such column" errors at runtime. Check actual
+        # column sets against expected and rebuild on drift. UNINDEXED is just a
+        # modifier — pragma_table_info still returns those columns.
+        #
+        # All drift checks MUST run before any FTS CREATE/INSERT below — otherwise
+        # a rebuild leaves the table absent and a subsequent CREATE IF NOT EXISTS
+        # has already run as a no-op.
+        def _rebuild_fts_if_drifted(table: str, triggers: list, expected_cols: set) -> None:
+            actual_cols = {r[0] for r in cursor.execute(
+                f"SELECT name FROM pragma_table_info('{table}')"
+            ).fetchall()}
+            if actual_cols != expected_cols:
+                cursor.execute(f"DROP TABLE IF EXISTS {table};")
+                for t in triggers:
+                    cursor.execute(f"DROP TRIGGER IF EXISTS {t};")
+
+        _rebuild_fts_if_drifted("search_index", [], {"content", "type", "ref_id", "project_id", "timestamp"})
+        _rebuild_fts_if_drifted("commands_fts",
+            ["commands_ai", "commands_ad", "commands_au"],
+            {"command", "exit_code"})
+        _rebuild_fts_if_drifted("sessions_fts",
+            ["sessions_ai", "sessions_ad", "sessions_au"],
+            {"ai_summary"})
+        _rebuild_fts_if_drifted("ai_summaries_fts",
+            ["macro_summaries_ai", "macro_summaries_ad", "macro_summaries_au"],
+            {"summary"})
+
         cursor.execute("""
         CREATE VIRTUAL TABLE IF NOT EXISTS search_index USING fts5(
             content,
@@ -1252,21 +1282,21 @@ class Database:
         if count == 0:
             cursor.execute("""
                 INSERT INTO search_index (content, type, ref_id, project_id, timestamp)
-                SELECT command, 'command', CAST(session_id AS TEXT), project_id, timestamp 
-                FROM commands 
+                SELECT command, 'command', CAST(session_id AS TEXT), project_id, timestamp
+                FROM commands
                 WHERE session_id IS NOT NULL;
             """)
-            
+
             cursor.execute("""
                 INSERT INTO search_index (content, type, ref_id, project_id, timestamp)
-                SELECT cleaned_message, 'commit', hash, project_id, timestamp 
+                SELECT cleaned_message, 'commit', hash, project_id, timestamp
                 FROM commits;
             """)
-            
+
             cursor.execute("""
                 INSERT INTO search_index (content, type, ref_id, project_id, timestamp)
-                SELECT ai_summary, 'session_summary', CAST(id AS TEXT), project_id, start_time 
-                FROM sessions 
+                SELECT ai_summary, 'session_summary', CAST(id AS TEXT), project_id, start_time
+                FROM sessions
                 WHERE ai_summary IS NOT NULL;
             """)
 
@@ -1286,27 +1316,6 @@ class Database:
                 SELECT id, command, exit_code FROM commands;
             """)
 
-        # FTS5 migration: older DBs may have drifted FTS column sets (e.g. sessions_fts
-        # used to have [content, session_id, project_id, timestamp]; current schema is
-        # [ai_summary]). CREATE VIRTUAL TABLE IF NOT EXISTS leaves drifted tables intact,
-        # so triggers/INSERTs hit "no such column" errors at runtime. Check the actual
-        # column set against the expected one and rebuild on drift.
-        def _rebuild_fts_if_drifted(table: str, triggers: list, expected_cols: set):
-            try:
-                actual_cols = {r[0] for r in cursor.execute(
-                    f"SELECT name FROM pragma_table_info('{table}')"
-                ).fetchall()}
-            except sqlite3.OperationalError:
-                return  # table doesn't exist yet — CREATE below handles it
-            if actual_cols != expected_cols:
-                cursor.execute(f"DROP TABLE IF EXISTS {table};")
-                for t in triggers:
-                    cursor.execute(f"DROP TRIGGER IF EXISTS {t};")
-
-        _rebuild_fts_if_drifted("sessions_fts",
-            ["sessions_ai", "sessions_ad", "sessions_au"],
-            {"ai_summary"})
-
         # Create and populate sessions_fts virtual table
         cursor.execute("""
         CREATE VIRTUAL TABLE IF NOT EXISTS sessions_fts USING fts5(
@@ -1321,16 +1330,6 @@ class Database:
                 INSERT INTO sessions_fts (rowid, ai_summary)
                 SELECT id, ai_summary FROM sessions WHERE ai_summary IS NOT NULL;
             """)
-
-        _rebuild_fts_if_drifted("commands_fts",
-            ["commands_ai", "commands_ad", "commands_au"],
-            {"command", "exit_code"})
-
-
-
-        _rebuild_fts_if_drifted("ai_summaries_fts",
-            ["macro_summaries_ai", "macro_summaries_ad", "macro_summaries_au"],
-            {"summary"})
 
         # Create and populate ai_summaries_fts virtual table (macro_summaries)
         cursor.execute("""
