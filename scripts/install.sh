@@ -32,7 +32,8 @@ WORK_DIR=$(mktemp -d)
 cleanup() {
   # Restore stranded venv backup if script was aborted mid-install
   if [ -n "$_BACKUP_DIR" ] && [ -d "$_BACKUP_DIR" ]; then
-    [ -d "$_BACKUP_DIR/termstory-venv" ] && mv "$_BACKUP_DIR/termstory-venv" "$HOME/.termstory-venv" 2>/dev/null
+    rm -rf "$HOME/.termstory-venv"
+    [ -d "$_BACKUP_DIR/termstory-venv" ] && mv "$_BACKUP_DIR/termstory-venv" "$HOME/.termstory-venv"
     rm -rf "$_BACKUP_DIR"
   fi
   rm -rf "${WORK_DIR:-}"
