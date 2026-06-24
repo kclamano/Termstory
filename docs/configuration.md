@@ -7,6 +7,7 @@ Config lives at `~/.termstory/config.json`:
     "ai_enabled": true,
     "active_provider": "groq",
     "request_timeout_seconds": 30,
+    "max_query_log": 10000,
     "has_seen_onboarding": true,
     "providers": {
         "groq": {
@@ -39,6 +40,7 @@ Key configuration parameters:
 - `ai_enabled` (bool): Toggle AI summaries on/off.
 - `active_provider` (string): Set to `"groq"`, `"openai"`, `"ollama"`, `"custom"`, or `"disabled"`.
 - `request_timeout_seconds` (int): HTTP request timeout (in seconds) for LLM API calls. Defaults to `30`.
+- `max_query_log` (int): Maximum number of captured database query profiler entries before older entries are trimmed. Defaults to `10000`.
 - `providers.<name>.<param>`: Provider-specific endpoints, API keys, and model names.
 
 ---

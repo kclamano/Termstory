@@ -161,7 +161,8 @@ def load_config() -> dict:
         "has_seen_onboarding": False,
         "has_seen_timestamp_prompt": False,
         "has_seen_onboarding_reminder": False,
-        "max_history_age": 5
+        "max_history_age": 5,
+        "max_query_log": 10000
     }
     
     config = {}

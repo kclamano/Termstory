@@ -29,6 +29,7 @@ def test_load_config_missing_file(tmp_path):
         assert config["ai_enabled"] is False
         assert config["active_provider"] == "disabled"
         assert config["max_history_age"] == 5
+        assert config["max_query_log"] == 10000
 
 def test_save_config_error_handling(tmp_path):
     # If open fails, save_config should not raise an exception

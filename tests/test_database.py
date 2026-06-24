@@ -291,5 +291,16 @@ def test_database_profiler_logs_queries(tmp_path):
     assert all(isinstance(log["duration"], float) for log in db.query_logs)
 
 
+def test_database_query_logs_are_bounded():
+    db = Database(":memory:")
+    db.max_query_log = 10
+
+    for i in range(16):
+        db.log_query(f"SELECT {i}", 0.001)
+
+    assert len(db.query_logs) <= db.max_query_log
+    assert db.query_logs[0]["sql"] == "SELECT 10"
+    assert db.query_logs[-1]["sql"] == "SELECT 15"
+
 
 

@@ -3,6 +3,7 @@ import json
 from datetime import datetime
 from typing import List, Dict, Optional
 from termstory.models import Command, Session, Project
+from termstory.config import get_config_value, load_config
 import time
 def safe_execute(cursor_or_conn, sql, *args, **kwargs):
     """A reusable helper to safely execute SQL queries."""
@@ -50,15 +51,21 @@ class SafeConnection(sqlite3.Connection):
         return safe_execute(self, sql, *args, **kwargs)
 
 class Database:
+    MAX_QUERY_LOG = 10000
+
     def __init__(self, db_path: str):
         self.db_path = db_path
         self.query_logs = []
+        configured_max = get_config_value(load_config(), "max_query_log")
+        self.max_query_log = configured_max if type(configured_max) is int and configured_max > 0 else self.MAX_QUERY_LOG
 
     def log_query(self, sql: str, duration: float):
         self.query_logs.append({
             "sql": sql,
             "duration": duration
         })
+        if len(self.query_logs) > self.max_query_log:
+            self.query_logs = self.query_logs[len(self.query_logs) // 2:]
         
     def get_connection(self) -> sqlite3.Connection:
         """Create and return a database connection with foreign key support enabled"""
