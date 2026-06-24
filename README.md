@@ -46,28 +46,9 @@ termstory search auth
 
 ## TUI Dashboard
 
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│  🔥 12 day streak  •  43 active days  •  127h 14m total                     │
-│  Activity (Last 90 Days):  ░░▒▒░▓▓█▓▒░░▒▒▓▓█▓▒░░▒▓▓█▓▒░░▒▒▓▓█▓▒░░▒░░      │
-├───────────────────────────────┬─────────────────────────────────────────────┤
-│  June 2026                    │  📂 termstory  •  Tue Jun 03                │
-│  ├─ Jun 07 (Sat)              │  ─────────────────────────────────────────  │
-│  │  └─ termstory              │  [💻 Dev Log]                               │
-│  │     ✨ v0.2.9 Timestamp… │  ├─ 🔨 Built: Timestamp Detective with      │
-│  ├─ Jun 06 (Fri)              │         5 forensic detectors & interpolation│
-│  │  ├─ termstory              │  ├─ 🔧 Flow: pytest 155 passed, twine      │
-│  │  └─ Other                  │         upload, git push origin main        │
-│  │     📦 Legacy Archive      │  └─ 🚀 Result: v0.2.9 published to PyPI    │
-│  └─ Jun 05 (Thu)              │                                             │
-│     └─ 🔍 Recovered Archive   │  💻 Command Timeline:                       │
-│                               │  • 00:47:57  git commit -m "feat: v0.2.9…" │
-│                               │      [🔍 git log: termstory@bbe9dfc]        │
-│                               │  • 00:48:12  python3 -m pytest tests/       │
-│                               │  • 00:49:03  twine upload dist/*            │
-└───────────────────────────────┴─────────────────────────────────────────────┘
-  ?:help  /:search  o:ai-config  c:copy  q:quit
-```
+![TermStory TUI Dashboard](https://raw.githubusercontent.com/bitflicker64/termstory/main/docs/assets/tui-dashboard.png)
+
+*TermStory v0.6.0 — AI-narrated daily chronicle, project timeline, focus metrics, and command playback.*
 
 ## Documentation & Key Features
 
