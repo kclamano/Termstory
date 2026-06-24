@@ -1286,21 +1286,26 @@ class Database:
                 SELECT id, command, exit_code FROM commands;
             """)
 
-        # Migrate sessions_fts: drop and rebuild if column set drifted (e.g. older DBs
-        # where sessions_fts had content/session_id/project_id/timestamp instead of ai_summary).
-        # CREATE VIRTUAL TABLE IF NOT EXISTS doesn't update existing tables.
-        def _sessions_fts_columns():
+        # FTS5 migration: older DBs may have drifted FTS column sets (e.g. sessions_fts
+        # used to have [content, session_id, project_id, timestamp]; current schema is
+        # [ai_summary]). CREATE VIRTUAL TABLE IF NOT EXISTS leaves drifted tables intact,
+        # so triggers/INSERTs hit "no such column" errors at runtime. Check the actual
+        # column set against the expected one and rebuild on drift.
+        def _rebuild_fts_if_drifted(table: str, triggers: list, expected_cols: set):
             try:
-                rows = cursor.execute("SELECT name FROM pragma_table_info('sessions_fts')").fetchall()
-                return {r[0] for r in rows} - {'content'}  # 'content' is shadow, ignore
+                actual_cols = {r[0] for r in cursor.execute(
+                    f"SELECT name FROM pragma_table_info('{table}')"
+                ).fetchall()}
             except sqlite3.OperationalError:
-                return set()
+                return  # table doesn't exist yet — CREATE below handles it
+            if actual_cols != expected_cols:
+                cursor.execute(f"DROP TABLE IF EXISTS {table};")
+                for t in triggers:
+                    cursor.execute(f"DROP TRIGGER IF EXISTS {t};")
 
-        if _sessions_fts_columns() != {'ai_summary'}:
-            cursor.execute("DROP TABLE IF EXISTS sessions_fts;")
-            cursor.execute("DROP TRIGGER IF EXISTS sessions_ai;")
-            cursor.execute("DROP TRIGGER IF EXISTS sessions_ad;")
-            cursor.execute("DROP TRIGGER IF EXISTS sessions_au;")
+        _rebuild_fts_if_drifted("sessions_fts",
+            ["sessions_ai", "sessions_ad", "sessions_au"],
+            {"ai_summary"})
 
         # Create and populate sessions_fts virtual table
         cursor.execute("""
@@ -1316,6 +1321,16 @@ class Database:
                 INSERT INTO sessions_fts (rowid, ai_summary)
                 SELECT id, ai_summary FROM sessions WHERE ai_summary IS NOT NULL;
             """)
+
+        _rebuild_fts_if_drifted("commands_fts",
+            ["commands_ai", "commands_ad", "commands_au"],
+            {"command", "exit_code"})
+
+
+
+        _rebuild_fts_if_drifted("ai_summaries_fts",
+            ["macro_summaries_ai", "macro_summaries_ad", "macro_summaries_au"],
+            {"summary"})
 
         # Create and populate ai_summaries_fts virtual table (macro_summaries)
         cursor.execute("""
