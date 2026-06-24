@@ -316,12 +316,15 @@ def generate_answer(query: str, sessions: List[Session], ai_client) -> Optional[
             block.append(f"Summary: {s.ai_summary.strip()}")
 
         if s.commands:
-            raw_cmds = [cmd.command for cmd in s.commands[:40]]
-            sanitized_cmds, is_blacklisted = sanitize_session_commands(raw_cmds)
+            # Check blacklist against ALL commands, not just the displayed
+            # slice — a sensitive op at index N>40 must still gate the session.
+            all_cmds = [cmd.command for cmd in s.commands]
+            _, is_blacklisted = sanitize_session_commands(all_cmds)
             block.append("Commands:")
             if is_blacklisted:
                 block.append("  - [REDACTED: Security/Authentication Operations]")
             else:
+                sanitized_cmds, _ = sanitize_session_commands(all_cmds[:40])
                 for sc in sanitized_cmds:
                     block.append(f"  - {sc}")
                 if len(s.commands) > 40:

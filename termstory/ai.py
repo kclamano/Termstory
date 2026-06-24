@@ -580,12 +580,17 @@ def generate_daily_chronicle_prompt(
         # Commands (filter noise, include exit codes for failed ones)
         cmds = [cmd for cmd in s.commands if not _is_noise_command(cmd.command)]
         if cmds:
-            shown = cmds[:15]
-            sanitized_cmds, is_blacklisted = sanitize_session_commands([c.command for c in shown])
+            # Blacklist check runs on the FULL non-noise list — a sensitive
+            # op at index N>15 must still gate the session, not just edit the
+            # sanitized text replacement for the first 15 displayed.
+            all_non_noise_cmds = [c.command for c in cmds]
+            _, is_blacklisted = sanitize_session_commands(all_non_noise_cmds)
             chrono_lines.append("COMMANDS:")
             if is_blacklisted:
                 chrono_lines.append("  - [REDACTED: Security/Authentication Operations]")
             else:
+                shown = cmds[:15]
+                sanitized_cmds, _ = sanitize_session_commands([c.command for c in shown])
                 for cmd, sc in zip(shown, sanitized_cmds):
                     exit_str = f" (Exit Code {cmd.exit_code})" if cmd.exit_code != 0 else ""
                     chrono_lines.append(f"  - {sc}{exit_str}")

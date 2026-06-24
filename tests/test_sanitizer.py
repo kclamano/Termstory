@@ -16,7 +16,7 @@ def test_blacklist_commands():
 
 def test_redact_environment_variables():
     # Exports
-    assert redact_command("export DATABASE_URL=mysql://root:pass@localhost/db") == "export DATABASE_URL=[REDACTED]"
+    assert redact_command("export DATABASE_URL=mysql://root:pass@localhost/db") == "export DATABASE_URL=[REDACTED_URI_CREDENTIALS]"
     assert redact_command("export AWS_SECRET_ACCESS_KEY='secret key'") == "export AWS_SECRET_ACCESS_KEY=[REDACTED]"
     assert redact_command('export PORT="8080"') == 'export PORT=[REDACTED]'
     

@@ -36,7 +36,13 @@ BLACKLIST_PATTERNS = [
     re.compile(r'\bgithub_pat_[a-zA-Z0-9_]+\b', re.IGNORECASE),
     re.compile(r'\bsk_live_[a-zA-Z0-9_]+\b', re.IGNORECASE),
     re.compile(r'\bnpm_[a-zA-Z0-9]{36}\b', re.IGNORECASE),
-    re.compile(r'\bsk-(?:proj-|ant-api03-)?[a-zA-Z0-9]{20,}\b', re.IGNORECASE)
+    re.compile(r'\bsk-(?:proj-|ant-api03-)?[a-zA-Z0-9]{20,}\b', re.IGNORECASE),
+    # GitHub PAT prefixes (ghp_, gho_, ghu_, ghs_, ghr_)
+    re.compile(r'\bgh[psouhr]_[a-zA-Z0-9]{20,}\b', re.IGNORECASE),
+    # URI credentials: scheme://user:password@host
+    re.compile(r'\b[a-zA-Z][a-zA-Z0-9+.-]*://[^\s:@/]+:[^\s:@/]+@[^\s]+\b', re.IGNORECASE),
+    # Natural-language password mentions in commit messages and commands
+    re.compile(r'\b(?:password|passwd|pwd|secret)\b\s*[=:]\s*\S+', re.IGNORECASE),
 ]
 
 # Hardcoded redaction patterns
@@ -130,6 +136,12 @@ def redact_command(cmd: str) -> str:
     """Sanitize and redact secrets from a command string"""
     # 1. SSH Private Keys
     cmd = SSH_PRIVATE_KEY_PATTERN.sub('[REDACTED_PRIVATE_KEY]', cmd)
+
+    # URI credentials: scheme://user:password@host
+    cmd = re.sub(r'\b[a-zA-Z][a-zA-Z0-9+.-]*://[^\s:@/]+:[^\s:@/]+@[^\s]+', '[REDACTED_URI_CREDENTIALS]', cmd)
+
+    # Natural-language password/secret literals (commit messages especially)
+    cmd = re.sub(r'\b(password|passwd|pwd|secret)\s+[A-Za-z0-9!@#$%^&*()\-_=+,.?]{6,}', r'\1 [REDACTED]', cmd, flags=re.IGNORECASE)
     
     # 2. AWS Keys, Slack Tokens, and AI API Keys
     cmd = AWS_KEY_PATTERN.sub('[REDACTED_AWS_KEY]', cmd)
