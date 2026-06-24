@@ -152,7 +152,15 @@ def archive_old_data(main_db_path: str, archive_db_path: str, days: int) -> Dict
                 SELECT start_time, end_time, duration_seconds, project_id, created_at, tags, ai_summary
                 FROM main.sessions WHERE id = ?
             """, (old_sess_id,))
-            start_time, end_time, duration_seconds, old_proj_id, created_at, tags, ai_summary = cursor.fetchone()
+            session_row = cursor.fetchone()
+            if session_row is None:
+                # Skip missing rows rather than crash — the session list could
+                # race with concurrent ingestion. Real-world trade-off here
+                # is "skip silently" vs "explode loudly"; skip is safer since
+                # archive_inventory_from_main has already bounded the work.
+                print(f"  Skipping session id={old_sess_id} (not found, may have been deleted)")
+                continue
+            start_time, end_time, duration_seconds, old_proj_id, created_at, tags, ai_summary = session_row
 
             new_proj_id = project_id_map.get(old_proj_id)
 
@@ -195,7 +203,11 @@ def archive_old_data(main_db_path: str, archive_db_path: str, days: int) -> Dict
                 SELECT timestamp, message, cleaned_message, project_id, created_at
                 FROM main.commits WHERE hash = ?
             """, (c_hash,))
-            c_ts, c_msg, c_cl_msg, old_c_proj_id, c_ca = cursor.fetchone()
+            commit_row = cursor.fetchone()
+            if commit_row is None:
+                print(f"  Skipping commit hash={c_hash} (not found, may have been deleted)")
+                continue
+            c_ts, c_msg, c_cl_msg, old_c_proj_id, c_ca = commit_row
             new_c_proj_id = project_id_map.get(old_c_proj_id)
             cursor.execute("""
                 INSERT OR IGNORE INTO archive.commits (hash, timestamp, message, cleaned_message, project_id, created_at)

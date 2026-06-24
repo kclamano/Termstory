@@ -5,6 +5,33 @@ from typing import List, Dict, Optional
 from termstory.models import Command, Session, Project
 from termstory.config import get_config_value, load_config
 import time
+
+
+def _safe_rollback_and_reraise(conn, original_exception):
+    """Roll back a failed transaction, surfacing the *original* exception.
+
+    Three things make this different from the inline pattern it replaces:
+
+    1. Uses bare `raise` (not `raise e`) so the original traceback is
+       preserved all the way to the caller, not clobbered to point at
+       the rollback site.
+    2. Wraps `conn.rollback()` in its own try/except so a broken
+       connection (e.g. file deleted, connection timed out) cannot
+       replace the original error with an unrelated OperationalError.
+    3. Re-raises the *original* exception even if rollback itself fails,
+       so the user sees the real cause instead of a misleading
+       "database is locked"-style message that points at the wrong line.
+    """
+    try:
+        conn.rollback()
+    except Exception:
+        # Swallow the rollback error and let the original propagate.
+        # The rollback being broken is informative but secondary to
+        # whatever originally raised.
+        pass
+    raise original_exception
+
+
 def safe_execute(cursor_or_conn, sql, *args, **kwargs):
     """A reusable helper to safely execute SQL queries."""
     if isinstance(cursor_or_conn, sqlite3.Cursor):
@@ -452,9 +479,26 @@ class Database:
                     """, (session.start_time, session.end_time, session.duration_seconds, session.project_id, session.tags))
                     db_id = cursor.lastrowid
                     if cursor.rowcount == 0:
-                        # INSERT OR IGNORE hit a conflict — fetch the existing row
-                        cursor.execute("SELECT id FROM sessions WHERE start_time = ? AND (project_id = ? OR (project_id IS NULL AND ? IS NULL))", (session.start_time, session.project_id, session.project_id))
+                        # INSERT OR IGNORE hit a conflict — fetch the existing row.
+                        # Match by (start_time, project_id) consistent with the unique
+                        # index idx_sessions_start_time_unique which uses
+                        # COALESCE(project_id, -1) to handle NULL project_id in the same
+                        # session as NULL project_id rows.
+                        cursor.execute(
+                            "SELECT id FROM sessions "
+                            "WHERE start_time = ? "
+                            "AND COALESCE(project_id, -1) = COALESCE(?, -1)",
+                            (session.start_time, session.project_id),
+                        )
                         row = cursor.fetchone()
+                        if row is None:
+                            # Defensive: reraise so the rollback goes through and
+                            # the caller can see why ingestion blew up.
+                            raise RuntimeError(
+                                f"INSERT OR IGNORE conflicted but no existing row found "
+                                f"for start_time={session.start_time} "
+                                f"project_id={session.project_id}"
+                            )
                         db_id = row[0]
                     session.id = db_id
                     
@@ -585,8 +629,7 @@ class Database:
 
             conn.commit()
         except Exception as e:
-            conn.rollback()
-            raise e
+            _safe_rollback_and_reraise(conn, e)
         finally:
             conn.close()
 
@@ -821,8 +864,7 @@ class Database:
                         """, (ai_summary, str(session_id), project_id, start_time))
             conn.commit()
         except Exception as e:
-            conn.rollback()
-            raise e
+            _safe_rollback_and_reraise(conn, e)
         finally:
             conn.close()
 
@@ -837,8 +879,7 @@ class Database:
             """, (tags, session_id))
             conn.commit()
         except Exception as e:
-            conn.rollback()
-            raise e
+            _safe_rollback_and_reraise(conn, e)
         finally:
             conn.close()
 
@@ -854,8 +895,7 @@ class Database:
             """, (session_id, source, json.dumps(payload), captured_at))
             conn.commit()
         except Exception as e:
-            conn.rollback()
-            raise e
+            _safe_rollback_and_reraise(conn, e)
         finally:
             conn.close()
 
@@ -932,8 +972,7 @@ class Database:
             """, (timeframe_id, type_str, summary))
             conn.commit()
         except Exception as e:
-            conn.rollback()
-            raise e
+            _safe_rollback_and_reraise(conn, e)
         finally:
             conn.close()
 
@@ -1064,8 +1103,7 @@ class Database:
             
             conn.commit()
         except Exception as e:
-            conn.rollback()
-            raise e
+            _safe_rollback_and_reraise(conn, e)
         finally:
             conn.close()
 
