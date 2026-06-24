@@ -22,10 +22,11 @@ def _safe_rollback_and_reraise(conn, original_exception):
        so the user sees the real cause instead of a misleading
        "database is locked"-style message that points at the wrong line.
 
-    Without #1, passing `e` to a helper clobbers the traceback because
-    Python 3 only preserves it for ``raise`` inside the original
-    ``except`` block — once you leave that scope (even into a function
-    call), ``raise e`` loses the traceback.
+    Without #1, ``raise e`` inside a helper function appends the helper's
+    own frame to the traceback, polluting the stack with an internal
+    implementation detail. Capturing ``__traceback__`` before rollback
+    and re-raising via ``with_traceback(tb)`` restores the original
+    traceback chain as if the helper had never been called.
     """
     tb = original_exception.__traceback__
     try:

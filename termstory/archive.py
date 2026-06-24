@@ -3,6 +3,7 @@ import sqlite3
 import re
 from datetime import datetime, timedelta, date
 from typing import Dict, Any, List, Optional
+from termstory.database import _safe_rollback_and_reraise
 from termstory.database import Database
 from termstory.date_utils import get_current_time
 
@@ -154,11 +155,12 @@ def archive_old_data(main_db_path: str, archive_db_path: str, days: int) -> Dict
             """, (old_sess_id,))
             session_row = cursor.fetchone()
             if session_row is None:
-                # Skip missing rows rather than crash — the session list could
-                # race with concurrent ingestion. Real-world trade-off here
-                # is "skip silently" vs "explode loudly"; skip is safer since
-                # archive_inventory_from_main has already bounded the work.
-                print(f"  Skipping session id={old_sess_id} (not found, may have been deleted)")
+                # Defense-in-depth: within the BEGIN IMMEDIATE transaction
+                # (line 73) no concurrent writer can delete the row between
+                # inventory and copy, so this guard is structurally unreachable.
+                # Present as a safety net against future transaction refactors
+                # or pre-existing data corruption.
+                print(f"  Skipping session id={old_sess_id} (not found)")
                 continue
             start_time, end_time, duration_seconds, old_proj_id, created_at, tags, ai_summary = session_row
 
@@ -279,8 +281,7 @@ def archive_old_data(main_db_path: str, archive_db_path: str, days: int) -> Dict
 
         conn.commit()
     except Exception as e:
-        conn.rollback()
-        raise e
+        _safe_rollback_and_reraise(conn, e)
     finally:
         try:
             conn.execute("DETACH DATABASE archive")
