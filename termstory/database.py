@@ -484,24 +484,28 @@ class Database:
                     db_id = cursor.lastrowid
                     if cursor.rowcount == 0:
                         # INSERT OR IGNORE hit a conflict — fetch the existing row.
-                        # Match by (start_time, project_id) consistent with the unique
-                        # index idx_sessions_start_time_unique which uses
-                        # COALESCE(project_id, -1) to handle NULL project_id in the same
-                        # session as NULL project_id rows.
+                        # The conflict can only come from the unique index on
+                        # start_time (with or without COALESCE(project_id,-1)),
+                        # so match by start_time only. Including project_id in
+                        # the WHERE clause causes false misses when the user's DB
+                        # still has the older index (sessions(start_time) — no
+                        # project_id at all) and the existing row has a different
+                        # project_id from the incoming session.
                         cursor.execute(
                             "SELECT id FROM sessions "
-                            "WHERE start_time = ? "
-                            "AND COALESCE(project_id, -1) = COALESCE(?, -1)",
-                            (session.start_time, session.project_id),
+                            "WHERE start_time = ?",
+                            (session.start_time,),
                         )
                         row = cursor.fetchone()
+                        # Guard: row should never be None here (conflict on the
+                        # unique index guarantees a row with this start_time
+                        # exists), but keep a defensive check for data integrity
+                        # issues or future index changes that might violate the
+                        # assumption.
                         if row is None:
-                            # Defensive: reraise so the rollback goes through and
-                            # the caller can see why ingestion blew up.
                             raise RuntimeError(
-                                f"INSERT OR IGNORE conflicted but no existing row found "
-                                f"for start_time={session.start_time} "
-                                f"project_id={session.project_id}"
+                                f"INSERT OR IGNORE conflicted but SELECT for "
+                                f"start_time={session.start_time} returned no rows"
                             )
                         db_id = row[0]
                     session.id = db_id
