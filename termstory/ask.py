@@ -98,7 +98,7 @@ def _bm25_score(
         else:
             # Prefix match for unigrams
             tf_raw = sum(v for k, v in doc_counter.items()
-                         if not ("_" in k) and k.startswith(q_t))
+                         if "_" not in k and k.startswith(q_t))
 
         if tf_raw == 0:
             continue
@@ -238,7 +238,7 @@ def search_ask(query: str, db) -> List[Session]:
                 if counter.get(q_t, 0) > 0:
                     count += 1
             else:
-                if any(not ("_" in k) and k.startswith(q_t) for k in counter):
+                if any("_" not in k and k.startswith(q_t) for k in counter):
                     count += 1
         df[q_t] = count
 

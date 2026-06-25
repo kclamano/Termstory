@@ -1,6 +1,6 @@
 import sqlite3
 import re
-from datetime import datetime, timedelta, date
+from datetime import timedelta, date
 from typing import Dict
 from termstory.database import _safe_rollback_and_reraise
 from termstory.database import Database
