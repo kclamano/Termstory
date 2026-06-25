@@ -2658,7 +2658,7 @@ class TermStoryWorkspace(App):
                 if base in editor_executables:
                     try:
                         shlex_tokens = shlex.split(cmd_str)
-                    except Exception:
+                    except ValueError:
                         shlex_tokens = tokens
                     files = [t for t in shlex_tokens[1:] if not t.startswith('-')]
                     for f in files:
